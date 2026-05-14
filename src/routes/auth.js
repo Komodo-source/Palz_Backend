@@ -4,7 +4,8 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 
 const signupSchema = z.object({
-  full_name: z.string().min(2).max(255),
+  surname: z.string().min(2).max(255),
+  first_name: z.string().min(2).max(255),
   user_name: z.string().min(3).max(255).regex(/^[a-zA-Z0-9_]+$/, 'Username must be alphanumeric'),
   email: z.string().email(),
   password: z.string().min(6).max(255),
@@ -34,12 +35,13 @@ async function authRoutes(app) {
       const hashedPassword = await bcrypt.hash(body.password, 12);
 
       const result = await query(
-        `INSERT INTO users (full_name, user_name, email, password, date_of_birth, phone)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+        `INSERT INTO users (surname, first_name, user_name, email, password, date_of_birth, phone)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, surname, first_name, user_name, email, date_of_birth, phone, profile_image, bio,
                    is_verified, is_premium, created_at`,
         [
-          body.full_name,
+          body.surname,
+          body.first_name,
           body.user_name,
           body.email,
           hashedPassword,
