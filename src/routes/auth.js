@@ -5,7 +5,7 @@ const { getUserId } = require('../middleware/auth');
 
 const signupSchema = z.object({
   surname: z.string().min(2).max(255),
-  first_name: z.string().min(2).max(255),
+  firstname: z.string().min(2).max(255),
   user_name: z.string().min(3).max(255).regex(/^[a-zA-Z0-9_]+$/, 'Username must be alphanumeric'),
   email: z.string().email(),
   password: z.string().min(6).max(255),
@@ -35,13 +35,13 @@ async function authRoutes(app) {
       const hashedPassword = await bcrypt.hash(body.password, 12);
 
       const result = await query(
-        `INSERT INTO users (surname, first_name, user_name, email, password, date_of_birth, phone)
+        `INSERT INTO users (surname, firstname, user_name, email, password, date_of_birth, phone)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, CONCAT(first_name, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+         RETURNING id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                    is_verified, is_premium, created_at`,
         [
           body.surname,
-          body.first_name,
+          body.firstname,
           body.user_name,
           body.email,
           hashedPassword,
@@ -68,7 +68,7 @@ async function authRoutes(app) {
       const body = loginSchema.parse(request.body);
 
       const result = await query(
-        `SELECT id, CONCAT(first_name, ' ', surname) AS full_name, user_name, email, password, date_of_birth, phone,
+        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, password, date_of_birth, phone,
                 profile_image, bio, is_verified, is_premium, created_at
          FROM users WHERE email = $1`,
         [body.email]
@@ -103,7 +103,7 @@ async function authRoutes(app) {
       const userId = getUserId(request);
 
       const result = await query(
-        `SELECT id, CONCAT(first_name, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                 work, situation, astrology_sign_id, interests, is_verified, is_premium,
                 location, home_location, latitude, longitude, search_radius,
                 girls_filter, events_filter, age_min_filter, age_max_filter,
