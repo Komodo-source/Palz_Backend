@@ -22,8 +22,8 @@ async function messageRoutes(app) {
              ELSE u1.id
            END AS other_user_id,
            CASE
-             WHEN pc.user_initiator = $1 THEN u2.full_name
-             ELSE u1.full_name
+             WHEN pc.user_initiator = $1 THEN CONCAT(u2.first_name, ' ', u2.surname)
+             ELSE CONCAT(u1.first_name, ' ', u1.surname)
            END AS other_user_name,
            CASE
              WHEN pc.user_initiator = $1 THEN u2.user_name
@@ -82,7 +82,7 @@ async function messageRoutes(app) {
       const result = await query(
         `SELECT m.id, m.sender_id, m.conversation_id, m.content, m.message_type,
                 m.media_url, m.is_seen, m.reply_to_message, m.created_at,
-                u.full_name AS sender_name, u.user_name AS sender_username,
+                CONCAT(u.first_name, ' ', u.surname) AS sender_name, u.user_name AS sender_username,
                 u.profile_image AS sender_image
          FROM messages m
          JOIN users u ON u.id = m.sender_id
