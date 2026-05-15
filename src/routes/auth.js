@@ -37,7 +37,7 @@ async function authRoutes(app) {
       const result = await query(
         `INSERT INTO users (surname, first_name, user_name, email, password, date_of_birth, phone)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, surname, first_name, user_name, email, date_of_birth, phone, profile_image, bio,
+         RETURNING id, CONCAT(first_name, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                    is_verified, is_premium, created_at`,
         [
           body.surname,
@@ -68,7 +68,7 @@ async function authRoutes(app) {
       const body = loginSchema.parse(request.body);
 
       const result = await query(
-        `SELECT id, full_name, user_name, email, password, date_of_birth, phone,
+        `SELECT id, CONCAT(first_name, ' ', surname) AS full_name, user_name, email, password, date_of_birth, phone,
                 profile_image, bio, is_verified, is_premium, created_at
          FROM users WHERE email = $1`,
         [body.email]
@@ -103,7 +103,7 @@ async function authRoutes(app) {
       const userId = getUserId(request);
 
       const result = await query(
-        `SELECT id, full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+        `SELECT id, CONCAT(first_name, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                 work, situation, astrology_sign_id, interests, is_verified, is_premium,
                 location, home_location, latitude, longitude, search_radius,
                 girls_filter, events_filter, age_min_filter, age_max_filter,
