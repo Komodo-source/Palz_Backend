@@ -93,7 +93,7 @@ async function authRoutes(app) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
-      console.error('Login error:', err);
+      console.log('Login error:', err);
       return reply.status(500).send({ error: 'Internal server error' });
     }
   });
@@ -118,7 +118,7 @@ async function authRoutes(app) {
 
       return reply.send({ user: result.rows[0] });
     } catch (err) {
-      console.error('Me error:', err);
+      console.log('Server error:', err);
       return reply.status(500).send({ error: 'Internal server error' });
     }
   });
