@@ -15,17 +15,16 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
 const app = Fastify({ logger: true });
 
+
+
+async function start() {
 await app.register(cors, {
   origin: true,
   credentials: true,
-  allowedHeaders: ['Authorization', 'x-api-key', 'Content-Type'] 
+  allowedHeaders: ['Authorization', 'x-api-key', 'Content-Type']
 });
 
-async function start() {
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-  });
+
 
   await app.register(jwt, { secret: JWT_SECRET });
 
