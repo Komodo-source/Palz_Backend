@@ -1,11 +1,16 @@
 const Fastify = require('fastify');
 const cors = require('@fastify/cors');
 const jwt = require('@fastify/jwt');
+const multipart = require('@fastify/multipart');
+const fastifyStatic = require('@fastify/static');
 const dotenv = require('dotenv');
+const path = require('path');
 const { authRoutes } = require('./routes/auth');
 const { userRoutes } = require('./routes/users');
 const { swipeRoutes } = require('./routes/swipes');
 const { messageRoutes } = require('./routes/messages');
+const { constantDataRoutes } = require('./routes/constant_data');
+const { uploadRoutes } = require('./routes/uploads');
 
 dotenv.config();
 
@@ -28,6 +33,20 @@ await app.register(cors, {
 
   await app.register(jwt, { secret: JWT_SECRET });
 
+  await app.register(multipart, {
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB max file size
+    },
+  });
+
+  // Serve uploaded files statically
+  const uploadsDir = path.join(__dirname, '..', 'uploads');
+  await app.register(fastifyStatic, {
+    root: uploadsDir,
+    prefix: '/uploads/',
+    decorateReply: false,
+  });
+
   app.decorate('authenticate', async function (request, reply) {
     try {
       await request.jwtVerify();
@@ -40,6 +59,8 @@ await app.register(cors, {
   await app.register(userRoutes, { prefix: '/api/users' });
   await app.register(swipeRoutes, { prefix: '/api/swipes' });
   await app.register(messageRoutes, { prefix: '/api/messages' });
+  await app.register(messageRoutes, { prefix: '/api/constant_data' });
+  await app.register(uploadRoutes, { prefix: '/api/upload' });
 
   app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 

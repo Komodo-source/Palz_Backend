@@ -7,6 +7,11 @@ const swipeSchema = z.object({
   direction: z.enum(['left', 'right']),
 });
 
+const calculate_social_energy = () => {
+  
+}
+
+
 async function swipeRoutes(app) {
   app.post('/', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {

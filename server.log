@@ -1,0 +1,18 @@
+{"level":30,"time":1778839321421,"pid":3404,"hostname":"Pierre","msg":"Server listening at http://127.0.0.1:3000"}
+🚀 Palz Backend running on http://0.0.0.0:3000
+{"level":30,"time":1778839321422,"pid":3404,"hostname":"Pierre","msg":"Server listening at http://192.168.1.122:3000"}
+{"level":30,"time":1778839323890,"pid":3404,"hostname":"Pierre","reqId":"req-1","req":{"method":"POST","url":"/api/auth/login","host":"localhost:3000","remoteAddress":"127.0.0.1","remotePort":63202},"msg":"incoming request"}
+DB host resolved: aws-0-eu-west-1.pooler.supabase.com -> 34.241.16.247 (IPv4)
+Executed query {
+  text: "SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, passw",
+  duration: 518,
+  rows: 0
+}
+{"level":30,"time":1778839324440,"pid":3404,"hostname":"Pierre","reqId":"req-1","res":{"statusCode":401},"responseTime":549.6322999894619,"msg":"request completed"}
+{"level":30,"time":1778839350615,"pid":3404,"hostname":"Pierre","reqId":"req-2","req":{"method":"POST","url":"/api/auth/login","host":"localhost:3000","remoteAddress":"127.0.0.1","remotePort":49161},"msg":"incoming request"}
+Executed query {
+  text: "SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, passw",
+  duration: 38,
+  rows: 0
+}
+{"level":30,"time":1778839350655,"pid":3404,"hostname":"Pierre","reqId":"req-2","res":{"statusCode":401},"responseTime":39.71040000021458,"msg":"request completed"}
