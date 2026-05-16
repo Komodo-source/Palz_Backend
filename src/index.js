@@ -59,7 +59,7 @@ await app.register(cors, {
   await app.register(userRoutes, { prefix: '/api/users' });
   await app.register(swipeRoutes, { prefix: '/api/swipes' });
   await app.register(messageRoutes, { prefix: '/api/messages' });
-  await app.register(messageRoutes, { prefix: '/api/constant_data' });
+  await app.register(constantDataRoutes, { prefix: '/api/constant_data' });
   await app.register(uploadRoutes, { prefix: '/api/upload' });
 
   app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));

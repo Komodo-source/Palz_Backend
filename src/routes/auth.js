@@ -172,7 +172,7 @@ async function authRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('Signup error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -207,7 +207,7 @@ async function authRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.log('Login error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -232,7 +232,7 @@ async function authRoutes(app) {
       return reply.send({ user: result.rows[0] });
     } catch (err) {
       console.log('Server error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 }
