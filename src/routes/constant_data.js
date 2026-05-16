@@ -1,4 +1,3 @@
-const { z } = require('zod');
 const { query } = require('../db');
 
 
@@ -13,7 +12,7 @@ async function constantData(app) {
       return reply.send({ astrology: result.rows });
     } catch (err) {
       console.error('Astrology error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -27,7 +26,7 @@ async function constantData(app) {
       return reply.send({ sports: result.rows });
     } catch (err) {
       console.error('Sport error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -38,10 +37,10 @@ async function constantData(app) {
         `SELECT id, title, description FROM search_friendship;`
       );
 
-      return reply.send({ sports: result.rows });
+      return reply.send({ search_types: result.rows });
     } catch (err) {
       console.error('type error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -52,27 +51,12 @@ async function constantData(app) {
         `SELECT title FROM hobbies;`
       );
 
-      return reply.send({ sports: result.rows });
+      return reply.send({ hobbies: result.rows });
     } catch (err) {
-      console.error('Sport error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      console.error('Hobbies error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
-
-  app.get('/get_hobbies', { preHandler: [app.authenticate] }, async (request, reply) => {
-    try {
-
-      const result = await query(
-        `SELECT title FROM hobbies;`
-      );
-
-      return reply.send({ sports: result.rows });
-    } catch (err) {
-      console.error('Sport error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
-    }
-  });
-
 
 }
 

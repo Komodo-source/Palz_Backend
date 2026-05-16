@@ -246,7 +246,7 @@ async function userRoutes(app) {
       });
     } catch (err) {
       console.error('Discover error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -269,7 +269,7 @@ async function userRoutes(app) {
       return reply.send({ user: result.rows[0] });
     } catch (err) {
       console.error('Get user error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -316,7 +316,7 @@ async function userRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('Update profile error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 }

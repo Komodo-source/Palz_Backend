@@ -86,7 +86,7 @@ async function swipeRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('Swipe error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -115,7 +115,7 @@ async function swipeRoutes(app) {
       return reply.send({ matches: result.rows });
     } catch (err) {
       console.error('Matches error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -140,7 +140,7 @@ async function swipeRoutes(app) {
       return reply.send({ likes: result.rows });
     } catch (err) {
       console.error('Likes error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -167,7 +167,7 @@ async function swipeRoutes(app) {
       return reply.send({ blocked: true });
     } catch (err) {
       console.error('Block error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 }

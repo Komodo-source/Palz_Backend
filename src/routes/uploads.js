@@ -37,7 +37,7 @@ async function uploadRoutes(app) {
       return reply.send({ url, filename });
     } catch (err) {
       console.error('Image upload error:', err);
-      return reply.status(500).send({ error: 'Upload failed' });
+      return reply.status(500).send({ error: 'Upload failed', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 
@@ -69,7 +69,7 @@ async function uploadRoutes(app) {
       return reply.send({ url, filename });
     } catch (err) {
       console.error('Audio upload error:', err);
-      return reply.status(500).send({ error: 'Upload failed' });
+      return reply.status(500).send({ error: 'Upload failed', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
     }
   });
 }
