@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const { z } = require('zod');
+const { OAuth2Client } = require('google-auth-library');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 
@@ -18,7 +19,119 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '639212474409-8q2g4e4hf7jqa88o7i70fq7m7c8rgpli.apps.googleusercontent.com';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+// Convert Google display name to surname + firstname
+function parseGoogleName(displayName) {
+  if (!displayName || !displayName.trim()) {
+    return { surname: 'User', firstname: 'New' };
+  }
+  const parts = displayName.trim().split(/\s+/);
+  if (parts.length === 1) {
+    return { surname: parts[0], firstname: parts[0] };
+  }
+  return {
+    firstname: parts[0],
+    surname: parts.slice(1).join(' '),
+  };
+}
+
+// Generate a unique username from email
+async function generateUserName(email) {
+  const base = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 20);
+  let userName = base;
+  let attempt = 0;
+  while (true) {
+    const existing = await query('SELECT id FROM users WHERE user_name = $1', [userName]);
+    if (existing.rows.length === 0) return userName;
+    attempt++;
+    const suffix = Math.floor(Math.random() * 10000);
+    userName = `${base.substring(0, 15)}_${suffix}`;
+  }
+}
+
 async function authRoutes(app) {
+
+  // ── Google OAuth ──
+  app.post('/google', async (request, reply) => {
+    try {
+      const { idToken } = request.body;
+      if (!idToken) {
+        return reply.status(400).send({ error: 'Missing idToken' });
+      }
+
+      // Verify the Google ID token
+      const ticket = await googleClient.verifyIdToken({
+        idToken,
+        audience: GOOGLE_CLIENT_ID,
+      });
+
+      const payload = ticket.getPayload();
+      const {
+        email,
+        name: displayName,
+        given_name: givenName,
+        family_name: familyName,
+        picture,
+      } = payload;
+
+      if (!email) {
+        return reply.status(400).send({ error: 'Google account has no email' });
+      }
+
+      // Check if user already exists
+      let result = await query(
+        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone,
+                profile_image, bio, is_verified, is_premium, created_at
+         FROM users WHERE email = $1`,
+        [email]
+      );
+
+      let user;
+      let isNewUser = false;
+
+      if (result.rows.length > 0) {
+        // Existing user — log them in
+        user = result.rows[0];
+
+        // Optionally update profile image if they have none
+        if (picture && (!user.profile_image || user.profile_image === '[]' || !Array.isArray(user.profile_image) || user.profile_image.length === 0)) {
+          await query(
+            `UPDATE users SET profile_image = $1 WHERE id = $2`,
+            [JSON.stringify([picture]), user.id]
+          );
+        }
+      } else {
+        // New user — create account
+        isNewUser = true;
+        const { surname, firstname } = familyName && givenName
+          ? { surname: familyName, firstname: givenName }
+          : parseGoogleName(displayName);
+
+        const userName = await generateUserName(email);
+        const randomPassword = require('crypto').randomBytes(32).toString('hex');
+        const hashedPassword = await bcrypt.hash(randomPassword, 12);
+
+        const insertResult = await query(
+          `INSERT INTO users (surname, firstname, user_name, email, password, profile_image, is_verified)
+           VALUES ($1, $2, $3, $4, $5, $6, true)
+           RETURNING id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+                     is_verified, is_premium, created_at`,
+          [surname, firstname, userName, email, hashedPassword, JSON.stringify(picture ? [picture] : [])]
+        );
+
+        user = insertResult.rows[0];
+      }
+
+      const token = app.jwt.sign({ id: user.id, email: user.email }, { expiresIn: '30d' });
+
+      return reply.send({ user, token, isNewUser });
+    } catch (err) {
+      console.error('Google auth error:', err);
+      return reply.status(401).send({ error: 'Google authentication failed' });
+    }
+  });
   app.post('/signup', async (request, reply) => {
     try {
       const body = signupSchema.parse(request.body);
@@ -104,7 +217,7 @@ async function authRoutes(app) {
 
       const result = await query(
         `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
-                work, situation, astrology_sign_id, interests, is_verified, is_premium,
+                work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified, is_premium,
                 location, home_location, latitude, longitude, search_radius,
                 girls_filter, events_filter, age_min_filter, age_max_filter,
                 ready_to_go, created_at, updated_at
