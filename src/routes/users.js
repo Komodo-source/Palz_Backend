@@ -3,7 +3,7 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 
 const updateProfileSchema = z.object({
-  nick_name: z.string().max(255).optional(),
+  astrology_sign_id: z.any().optional(),
   bio: z.string().optional(),
   work: z.string().optional(),
   situation: z.string().optional(),
@@ -255,10 +255,13 @@ async function userRoutes(app) {
       const { id } = request.params;
 
       const result = await query(
-        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, date_of_birth, profile_image, bio,
-                work, situation, location, home_location, astrology_sign_id,
-                interests, is_premium, is_verified, created_at
-         FROM users WHERE id = $1`,
+        `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.date_of_birth, u.profile_image, u.bio,
+                u.work, u.situation, u.location, u.home_location, u.astrology_sign_id,
+                a.name AS astrology_title,
+                u.interests, u.is_premium, u.is_verified, u.created_at
+         FROM users u
+         LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
+         WHERE u.id = $1`,
         [id]
       );
 
