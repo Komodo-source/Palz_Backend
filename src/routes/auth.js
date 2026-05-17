@@ -96,7 +96,9 @@ async function authRoutes(app) {
         user = result.rows[0];
 
         // Optionally update profile image if they have none
-        if (picture && (!user.profile_image || user.profile_image === '[]' || !Array.isArray(user.profile_image) || user.profile_image.length === 0)) {
+        let parsedImage = [];
+        try { parsedImage = typeof user.profile_image === 'string' ? JSON.parse(user.profile_image) : (user.profile_image || []); } catch {}
+        if (picture && (!Array.isArray(parsedImage) || parsedImage.length === 0)) {
           await query(
             `UPDATE users SET profile_image = $1 WHERE id = $2`,
             [JSON.stringify([picture]), user.id]

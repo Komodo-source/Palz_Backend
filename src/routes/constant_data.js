@@ -6,7 +6,7 @@ async function constantDataRoutes(app) {
     try {
 
       const result = await query(
-        `SELECT name FROM astrology_signs;`
+        `SELECT id, name FROM astrology_signs;`
       );
 
       return reply.send({ astrology: result.rows });
