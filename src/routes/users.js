@@ -203,29 +203,42 @@ async function userRoutes(app) {
       );
       const me = meResult.rows[0];
 
-      // Fetch candidate pool (unviewed, unliked, not blocked)
+      // Fetch candidate pool (unviewed, unliked, not blocked)s.
       const candidatesResult = await query(
         `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.date_of_birth, u.profile_image,
                 u.bio, u.work, u.situation, u.location, u.interests,
                 u.latitude, u.longitude,
                 a.name AS astrology_title,
-                u.is_premium, u.created_at
-         FROM users u
-         LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
-         WHERE u.id != $1
-           AND u.id NOT IN (
-             SELECT liked_id FROM user_likes WHERE liker_id = $1
-           )
-           AND u.id NOT IN (
-             SELECT viewed_id FROM viewed_users WHERE viewer_id = $1
-           )
-           AND u.id NOT IN (
-             SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
-           )
-           AND u.id NOT IN (
-             SELECT blocker_id FROM blocked_users WHERE blocked_id = $1
-           )
-         LIMIT 50`,
+                u.is_premium, u.created_at,
+                jsonb_agg(DISTINCT s.title) FILTER (WHERE s.title IS NOT NULL) AS sports,
+                jsonb_agg(DISTINCT h.title) FILTER (WHERE h.title IS NOT NULL) AS hobbies
+              FROM users u
+              LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
+              LEFT JOIN user_hobbies hb ON hb.user_id = u.id
+              LEFT JOIN hobbies h ON hb.hobby_id = h.id
+
+              LEFT JOIN user_sports us ON us.user_id = u.id
+              LEFT JOIN sports s ON us.sport_id = s.id
+
+              WHERE u.id != $1
+                AND u.id NOT IN (
+                  SELECT liked_id FROM user_likes WHERE liker_id = $1
+                )
+                AND u.id NOT IN (
+                  SELECT viewed_id FROM viewed_users WHERE viewer_id = $1
+                )
+                AND u.id NOT IN (
+                  SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
+                )
+                AND u.id NOT IN (
+                  SELECT blocker_id FROM blocked_users WHERE blocked_id = $1
+                )
+              GROUP BY u.id, u.user_name, u.date_of_birth, u.profile_image,
+                      u.bio, u.work, u.situation, u.location, u.interests,
+                      u.latitude, u.longitude,
+                      a.name,
+                      u.is_premium, u.created_at
+              LIMIT 50`,
         [userId]
       );
 
