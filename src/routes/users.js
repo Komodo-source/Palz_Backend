@@ -195,9 +195,9 @@ async function userRoutes(app) {
       // Fetch current user profile (for scoring)
       const meResult = await query(
         `SELECT u.id, u.interests, u.astrology_sign_id, u.latitude, u.longitude,
-                a.title AS astrology_title
+                a.name AS astrology_title
          FROM users u
-         LEFT JOIN astrology a ON a.id = u.astrology_sign_id
+         LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
          WHERE u.id = $1`,
         [userId]
       );
@@ -208,10 +208,10 @@ async function userRoutes(app) {
         `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.date_of_birth, u.profile_image,
                 u.bio, u.work, u.situation, u.location, u.interests,
                 u.latitude, u.longitude,
-                a.title AS astrology_title,
+                a.name AS astrology_title,
                 u.is_premium, u.created_at
          FROM users u
-         LEFT JOIN astrology a ON a.id = u.astrology_sign_id
+         LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
          WHERE u.id != $1
            AND u.id NOT IN (
              SELECT liked_id FROM user_likes WHERE liker_id = $1
