@@ -1,7 +1,7 @@
 const { query } = require('../db');
 
 
-async function constantData(app) {
+async function constantDataRoutes(app) {
   app.get('/get_zodiac_sign', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
 
@@ -60,4 +60,4 @@ async function constantData(app) {
 
 }
 
-module.exports = { constantData };
+module.exports = { constantDataRoutes };
