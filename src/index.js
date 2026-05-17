@@ -35,7 +35,7 @@ await app.register(cors, {
 
   await app.register(multipart, {
     limits: {
-      fileSize: 10 * 1024 * 1024, // 10MB max file size
+      fileSize: 10 * 1024 * 1024, 
     },
   });
 
@@ -51,7 +51,7 @@ await app.register(cors, {
     try {
       await request.jwtVerify();
     } catch (err) {
-      reply.status(401).send({ error: 'Unauthorized' });
+      return reply.status(401).send({ error: 'Unauthorized' });
     }
   });
 

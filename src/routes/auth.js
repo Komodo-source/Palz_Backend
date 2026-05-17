@@ -171,8 +171,8 @@ async function authRoutes(app) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
-      console.error('Signup error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      console.error('/auth/signup error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 
@@ -206,8 +206,8 @@ async function authRoutes(app) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
-      console.log('Login error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      console.error('/auth/login error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 
@@ -231,8 +231,8 @@ async function authRoutes(app) {
 
       return reply.send({ user: result.rows[0] });
     } catch (err) {
-      console.log('Server error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      console.error('/auth/me error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 }
