@@ -12,7 +12,7 @@ async function constantDataRoutes(app) {
       return reply.send({ astrology: result.rows });
     } catch (err) {
       console.error('Astrology error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 
@@ -26,7 +26,7 @@ async function constantDataRoutes(app) {
       return reply.send({ sports: result.rows });
     } catch (err) {
       console.error('Sport error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 
@@ -40,7 +40,7 @@ async function constantDataRoutes(app) {
       return reply.send({ search_types: result.rows });
     } catch (err) {
       console.error('type error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 
@@ -54,7 +54,7 @@ async function constantDataRoutes(app) {
       return reply.send({ hobbies: result.rows });
     } catch (err) {
       console.error('Hobbies error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
     }
   });
 
