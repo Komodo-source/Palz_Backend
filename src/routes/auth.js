@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { OAuth2Client } = require('google-auth-library');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
+const { exposeErrorDetails } = require('../debug');
 
 const signupSchema = z.object({
   surname: z.string().min(2).max(255),
@@ -174,7 +175,7 @@ async function authRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('/auth/signup error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -209,7 +210,7 @@ async function authRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('/auth/login error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -234,7 +235,7 @@ async function authRoutes(app) {
       return reply.send({ user: result.rows[0] });
     } catch (err) {
       console.error('/auth/me error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 }

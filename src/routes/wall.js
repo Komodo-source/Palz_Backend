@@ -1,5 +1,6 @@
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
+const { exposeErrorDetails } = require('../debug');
 
 // ── Predefined wall themes (rotate every 3 days) ──
 const WALL_THEMES = [
@@ -78,7 +79,7 @@ async function wallRoutes(app) {
       return reply.send({ theme });
     } catch (err) {
       console.error('Wall theme error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -108,7 +109,7 @@ async function wallRoutes(app) {
       return reply.send({ posts: result.rows, theme });
     } catch (err) {
       console.error('Wall posts error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -136,7 +137,7 @@ async function wallRoutes(app) {
       return reply.status(201).send({ post: result.rows[0] });
     } catch (err) {
       console.error('Wall post error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -161,7 +162,7 @@ async function wallRoutes(app) {
       return reply.send({ deleted: true });
     } catch (err) {
       console.error('Wall delete error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 }

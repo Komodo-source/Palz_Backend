@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
+const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm, parseInterests } = require('../matching');
 
 const createGroupMessageSchema = z.object({
@@ -117,7 +118,7 @@ async function groupRoutes(app) {
       });
     } catch (err) {
       console.error('Current group error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -282,7 +283,7 @@ async function groupRoutes(app) {
       });
     } catch (err) {
       console.error('Generate group error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -319,7 +320,7 @@ async function groupRoutes(app) {
       return reply.send({ left: true });
     } catch (err) {
       console.error('Leave group error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -434,7 +435,7 @@ async function groupRoutes(app) {
       });
     } catch (err) {
       console.error('Vote error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -473,7 +474,7 @@ async function groupRoutes(app) {
       return reply.send({ messages: result.rows });
     } catch (err) {
       console.error('Group messages error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -508,7 +509,7 @@ async function groupRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('Group message send error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -543,7 +544,7 @@ async function groupRoutes(app) {
       return reply.send({ updated: true });
     } catch (err) {
       console.error('Rendezvous error:', err);
-      return reply.status(500).send({ error: 'Internal server error' });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 }
