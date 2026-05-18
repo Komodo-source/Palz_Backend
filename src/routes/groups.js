@@ -85,7 +85,7 @@ async function groupRoutes(app) {
 
       // Get members
       const membersResult = await query(
-        `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name,
+        `SELECT u.id, u.full_name,
                 u.user_name, u.profile_image, u.location
          FROM group_participants gp
          JOIN users u ON u.id = gp.user_id
@@ -261,7 +261,7 @@ async function groupRoutes(app) {
 
       // Get full member details
       const membersResult = await query(
-        `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name,
+        `SELECT u.id, u.full_name,
                 u.user_name, u.profile_image, u.location
          FROM group_participants gp
          JOIN users u ON u.id = gp.user_id
@@ -460,7 +460,7 @@ async function groupRoutes(app) {
       const result = await query(
         `SELECT gm.id, gm.sender_id, gm.content, gm.message_type,
                 gm.media_url, gm.created_at,
-                CONCAT(u.firstname, ' ', u.surname) AS sender_name,
+                u.full_name AS sender_name,
                 u.user_name AS sender_username,
                 u.profile_image AS sender_image
          FROM group_messages gm
