@@ -92,7 +92,7 @@ async function swipeRoutes(app) {
 
       const result = await query(
         `SELECT
-           u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.profile_image, u.bio,
+           u.id, u.full_name, u.user_name, u.profile_image, u.bio,
            pc.id AS conversation_id, ul.created_at AS matched_at
          FROM user_likes ul
          JOIN users u ON u.id = ul.liker_id
@@ -120,7 +120,7 @@ async function swipeRoutes(app) {
       const userId = getUserId(request);
 
       const result = await query(
-        `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.profile_image, u.bio,
+        `SELECT u.id, u.full_name, u.user_name, u.profile_image, u.bio,
                 ul.created_at AS liked_at
          FROM user_likes ul
          JOIN users u ON u.id = ul.liker_id

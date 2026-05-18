@@ -98,7 +98,7 @@ async function userRoutes(app) {
 
       // Fetch candidate pool (unviewed, unliked, not blocked)s.
       const candidatesResult = await query(
-        `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.date_of_birth, u.profile_image,
+        `SELECT u.id, u.full_name, u.user_name, u.date_of_birth, u.profile_image,
                 u.bio, u.work, u.situation, u.location, u.interests,
                 u.latitude, u.longitude,
                 a.name AS astrology_title,
@@ -161,7 +161,7 @@ async function userRoutes(app) {
       const { id } = request.params;
 
       const result = await query(
-        `SELECT u.id, CONCAT(u.firstname, ' ', u.surname) AS full_name, u.user_name, u.date_of_birth, u.profile_image, u.bio,
+        `SELECT u.id, u.full_name, u.user_name, u.date_of_birth, u.profile_image, u.bio,
                 u.work, u.situation, u.location, u.home_location, u.astrology_sign_id,
                 a.name AS astrology_title,
                 u.interests, u.is_premium, u.is_verified, u.created_at
@@ -212,7 +212,7 @@ async function userRoutes(app) {
 
       const result = await query(
         `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex}
-         RETURNING id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image,
+         RETURNING id, full_name, user_name, email, date_of_birth, phone, profile_image,
                    bio, work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified,
                    is_premium, location, home_location, latitude, longitude,
                    search_radius, age_min_filter, age_max_filter, ready_to_go, updated_at`,

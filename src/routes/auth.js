@@ -6,8 +6,7 @@ const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 
 const signupSchema = z.object({
-  surname: z.string().min(2).max(255),
-  firstname: z.string().min(2).max(255),
+  full_name: z.string().min(2).max(255),
   user_name: z.string().min(3).max(255).regex(/^[a-zA-Z0-9_]+$/, 'Username must be alphanumeric'),
   email: z.string().email(),
   password: z.string().min(6).max(255),
@@ -23,19 +22,11 @@ const loginSchema = z.object({
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '639212474409-8q2g4e4hf7jqa88o7i70fq7m7c8rgpli.apps.googleusercontent.com';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// Convert Google display name to surname + firstname
 function parseGoogleName(displayName) {
   if (!displayName || !displayName.trim()) {
-    return { surname: 'User', firstname: 'New' };
+    return 'New User';
   }
-  const parts = displayName.trim().split(/\s+/);
-  if (parts.length === 1) {
-    return { surname: parts[0], firstname: parts[0] };
-  }
-  return {
-    firstname: parts[0],
-    surname: parts.slice(1).join(' '),
-  };
+  return displayName.trim();
 }
 
 // Generate a unique username from email
@@ -79,11 +70,9 @@ async function authRoutes(app) {
 
       if (!email) {
         return reply.status(400).send({ error: 'Google account has no email' });
-      }
-
-      // Check if user already exists
+      }        // Check if user already exists
       let result = await query(
-        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone,
+        `SELECT id, full_name, user_name, email, date_of_birth, phone,
                 profile_image, bio, is_verified, is_premium, created_at
          FROM users WHERE email = $1`,
         [email]
@@ -108,8 +97,8 @@ async function authRoutes(app) {
       } else {
         // New user — create account
         isNewUser = true;
-        const { surname, firstname } = familyName && givenName
-          ? { surname: familyName, firstname: givenName }
+        const googleFullName = familyName && givenName
+          ? `${givenName} ${familyName}`
           : parseGoogleName(displayName);
 
         const userName = await generateUserName(email);
@@ -117,11 +106,11 @@ async function authRoutes(app) {
         const hashedPassword = await bcrypt.hash(randomPassword, 12);
 
         const insertResult = await query(
-          `INSERT INTO users (surname, firstname, user_name, email, password, profile_image, is_verified)
-           VALUES ($1, $2, $3, $4, $5, $6, true)
-           RETURNING id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+          `INSERT INTO users (full_name, user_name, email, password, profile_image, is_verified)
+           VALUES ($1, $2, $3, $4, $5, true)
+           RETURNING id, full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                      is_verified, is_premium, created_at`,
-          [surname, firstname, userName, email, hashedPassword, JSON.stringify(picture ? [picture] : [])]
+          [googleFullName, userName, email, hashedPassword, JSON.stringify(picture ? [picture] : [])]
         );
 
         user = insertResult.rows[0];
@@ -151,13 +140,12 @@ async function authRoutes(app) {
       const hashedPassword = await bcrypt.hash(body.password, 12);
 
       const result = await query(
-        `INSERT INTO users (surname, firstname, user_name, email, password, date_of_birth, phone)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+        `INSERT INTO users (full_name, user_name, email, password, date_of_birth, phone)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                    is_verified, is_premium, created_at`,
         [
-          body.surname,
-          body.firstname,
+          body.full_name,
           body.user_name,
           body.email,
           hashedPassword,
@@ -184,7 +172,7 @@ async function authRoutes(app) {
       const body = loginSchema.parse(request.body);
 
       const result = await query(
-        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, password, date_of_birth, phone,
+        `SELECT id, full_name, user_name, email, password, date_of_birth, phone,
                 profile_image, bio, is_verified, is_premium, created_at
          FROM users WHERE email = $1`,
         [body.email]
@@ -231,7 +219,7 @@ async function authRoutes(app) {
       const userId = getUserId(request);
 
       const result = await query(
-        `SELECT id, CONCAT(firstname, ' ', surname) AS full_name, user_name, email, date_of_birth, phone, profile_image, bio,
+        `SELECT id, full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                 work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified, is_premium,
                 location, home_location, latitude, longitude, search_radius,
                 girls_filter, events_filter, age_min_filter, age_max_filter,

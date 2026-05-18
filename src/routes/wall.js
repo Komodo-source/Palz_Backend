@@ -95,7 +95,7 @@ async function wallRoutes(app) {
 
       const result = await query(
         `SELECT w.id, w.user_initiator, w.wall_photo, w.created_at,
-                CONCAT(u.firstname, ' ', u.surname) AS user_full_name,
+                u.full_name AS user_full_name,
                 u.user_name, u.profile_image
          FROM wall w
          JOIN users u ON u.id = w.user_initiator
