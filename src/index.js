@@ -11,6 +11,8 @@ const { swipeRoutes } = require('./routes/swipes');
 const { messageRoutes } = require('./routes/messages');
 const { constantDataRoutes } = require('./routes/constant_data');
 const { uploadRoutes } = require('./routes/uploads');
+const { wallRoutes } = require('./routes/wall');
+const { groupRoutes } = require('./routes/groups');
 
 dotenv.config();
 
@@ -61,6 +63,8 @@ await app.register(cors, {
   await app.register(messageRoutes, { prefix: '/api/messages' });
   await app.register(constantDataRoutes, { prefix: '/api/constant_data' });
   await app.register(uploadRoutes, { prefix: '/api/upload' });
+  await app.register(wallRoutes, { prefix: '/api/wall' });
+  await app.register(groupRoutes, { prefix: '/api/groups' });
 
   app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
