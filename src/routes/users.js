@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
+const { scoreCandidate, haversineKm } = require('../matching');
 
 const updateProfileSchema = z.object({
   astrology_sign_id: z.any().optional(),
@@ -28,120 +29,11 @@ const updateProfileSchema = z.object({
 
 
 // ── KNN Matching Algorithm ──
-//
-// All features are normalized to 0..1 before weighting:
-//   Personality (interest distance) : 50% — strongest signal
-//   Common hobbies                  : 20%
-//   Common sports                   : 20%
-//   Geographic proximity            : 10%
-//   Zodiac compatibility            :  5% — soft tie-breaker only
+// Shared matching functions imported from ../matching.js
 //
 // Recommendations use a 70/30 split:
 //   • 70 % highest-scoring (compatible) candidates
 //   • 30 % exploratory picks from the mid-tier
-
-const MAX_DISTANCE_KM = 15;
-const MAX_INTEREST_DISTANCE = Math.sqrt(9 * 9 * 3); // max euclidean for 1-10 scales
-
-/** Count shared items between two arrays, normalized to 0..1 */
-function getCommonItems(arr1, arr2) {
-  if (!Array.isArray(arr1) || !Array.isArray(arr2)) return 0;
-  if (arr1.length === 0 || arr2.length === 0) return 0;
-  const set2 = new Set(arr2);
-  const commonCount = arr1.filter((item) => set2.has(item)).length;
-  return commonCount / Math.max(arr1.length, arr2.length);
-}
-
-/** Euclidean distance of the 3 interest dimensions, normalized 0..1 (1 = identical) */
-function calculateInterestDistance(central, excentrated) {
-  const c = central || {};
-  const e = excentrated || {};
-  const se = (Number(c.social_energy) || 5) - (Number(e.social_energy) || 5);
-  const ps = (Number(c.planning_style) || 5) - (Number(e.planning_style) || 5);
-  const cd = (Number(c.conversation_depth) || 5) - (Number(e.conversation_depth) || 5);
-  const raw = Math.sqrt(se * se + ps * ps + cd * cd);
-  return 1 - raw / MAX_INTEREST_DISTANCE; // 1 = perfect match
-}
-
-/** Check zodiac-pair compatibility (returns true/false) */
-function checkZodiacCompatibility(zodiacA, zodiacB) {
-  if (!zodiacA || !zodiacB) return false;
-  const compatiblePairs = [
-    ['Bélier', 'Lion'], ['Bélier', 'Sagittaire'], ['Lion', 'Sagittaire'],
-    ['Taureau', 'Vierge'], ['Taureau', 'Capricorne'], ['Vierge', 'Capricorne'],
-    ['Gémeaux', 'Balance'], ['Gémeaux', 'Verseau'], ['Balance', 'Verseau'],
-    ['Cancer', 'Scorpion'], ['Cancer', 'Poissons'], ['Scorpion', 'Poissons'],
-    ['Bélier', 'Gémeaux'], ['Lion', 'Balance'],
-    ['Vierge', 'Scorpion'], ['Taureau', 'Cancer'],
-    ['Sagittaire', 'Verseau'], ['Capricorne', 'Poissons'],
-  ];
-  return compatiblePairs.some(
-    ([a, b]) => (zodiacA === a && zodiacB === b) || (zodiacA === b && zodiacB === a)
-  );
-}
-
-/**
- * Score a candidate against the current user.
- * Returns a number 0..1 where higher = better match.
- */
-function scoreCandidate(user, candidate) {
-  let userInterests = {};
-  let candInterests = {};
-  let userSports = [];
-  let userHobbies = [];
-  let candSports = [];
-  let candHobbies = [];
-
-  try { userInterests = typeof user.interests === 'string' ? JSON.parse(user.interests) : (user.interests || {}); } catch {}
-  try { candInterests = typeof candidate.interests === 'string' ? JSON.parse(candidate.interests) : (candidate.interests || {}); } catch {}
-
-  userSports = userInterests.sports || [];
-  userHobbies = userInterests.hobbies || [];
-  candSports = candInterests.sports || [];
-  candHobbies = candInterests.hobbies || [];
-
-  // 1. Personality compatibility (strongest signal — 50 %)
-  const personalityScore = calculateInterestDistance(userInterests, candInterests);
-
-  // 2. Shared hobbies (20 %)
-  const hobbiesScore = getCommonItems(userHobbies, candHobbies);
-
-  // 3. Shared sports (20 %)
-  const sportsScore = getCommonItems(userSports, candSports);
-
-  // 4. Geographic proximity (10 %)
-  let distanceScore = 0;
-  if (user.latitude && user.longitude && candidate.latitude && candidate.longitude) {
-    const dist = haversineKm(
-      parseFloat(user.latitude), parseFloat(user.longitude),
-      parseFloat(candidate.latitude), parseFloat(candidate.longitude)
-    );
-    distanceScore = Math.max(0, 1 - dist / MAX_DISTANCE_KM);
-  }
-
-  // 5. Zodiac (5 % — tie-breaker only)
-  const zodiacScore = checkZodiacCompatibility(user.astrology_title, candidate.astrology_title) ? 1 : 0;
-
-  return (
-    personalityScore * 0.50 +
-    hobbiesScore * 0.20 +
-    sportsScore * 0.20 +
-    distanceScore * 0.10 +
-    zodiacScore * 0.05
-  );
-}
-
-/** Haversine distance in km */
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const R = 6371.07103;
-  const toRad = (deg) => deg * (Math.PI / 180);
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.asin(Math.sqrt(a));
-}
 
 /** Compute how different two candidates are (inverse of their similarity) */
 function candidateDifference(candA, candB) {
