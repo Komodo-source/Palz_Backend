@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
+const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm } = require('../matching');
 
 const updateProfileSchema = z.object({
@@ -151,7 +152,7 @@ async function userRoutes(app) {
       });
     } catch (err) {
       console.error('Discover error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -177,7 +178,7 @@ async function userRoutes(app) {
       return reply.send({ user: result.rows[0] });
     } catch (err) {
       console.error('Get user error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -224,7 +225,7 @@ async function userRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('Update profile error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 }

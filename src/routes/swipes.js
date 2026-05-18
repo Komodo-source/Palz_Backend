@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
+const { exposeErrorDetails } = require('../debug');
 
 const swipeSchema = z.object({
   target_id: z.string().uuid(),
@@ -81,7 +82,7 @@ async function swipeRoutes(app) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
       }
       console.error('Swipe error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -110,7 +111,7 @@ async function swipeRoutes(app) {
       return reply.send({ matches: result.rows });
     } catch (err) {
       console.error('Matches error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -135,7 +136,7 @@ async function swipeRoutes(app) {
       return reply.send({ likes: result.rows });
     } catch (err) {
       console.error('Likes error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 
@@ -162,7 +163,7 @@ async function swipeRoutes(app) {
       return reply.send({ blocked: true });
     } catch (err) {
       console.error('Block error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true' ? err.message : undefined });
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
 }

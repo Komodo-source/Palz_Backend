@@ -1,9 +1,10 @@
 const path = require('path');
 const { getUserId } = require('../middleware/auth');
 const { supabase } = require('../supabase');
+const { exposeErrorDetails } = require('../debug');
 
 async function uploadRoutes(app) {
-  // Upload profile image → Supabase "images" bucket
+  // Upload profile image → Supabase "user_photos" bucket
   app.post('/image', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
@@ -31,7 +32,7 @@ async function uploadRoutes(app) {
 
       // Upload to Supabase storage
       const { error: uploadError } = await supabase.storage
-        .from('images')
+        .from('user_photos')
         .upload(filename, buffer, {
           contentType: data.mimetype,
           upsert: false,
@@ -44,7 +45,7 @@ async function uploadRoutes(app) {
 
       // Get public URL
       const { data: publicUrlData } = supabase.storage
-        .from('images')
+        .from('user_photos')
         .getPublicUrl(filename);
 
       return reply.send({ url: publicUrlData.publicUrl, filename });
@@ -52,14 +53,12 @@ async function uploadRoutes(app) {
       console.error('Image upload error:', err);
       return reply.status(500).send({
         error: 'Upload failed',
-        details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true'
-          ? err.message
-          : undefined,
+        details: exposeErrorDetails(request) ? err.message : undefined,
       });
     }
   });
 
-  // Upload audio fun fact → Supabase "audio" bucket
+  // Upload audio fun fact → Supabase "audio_users" bucket
   app.post('/audio', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
@@ -93,7 +92,7 @@ async function uploadRoutes(app) {
 
       // Upload to Supabase storage
       const { error: uploadError } = await supabase.storage
-        .from('audio')
+        .from('audio_users')
         .upload(filename, buffer, {
           contentType: data.mimetype,
           upsert: false,
@@ -106,7 +105,7 @@ async function uploadRoutes(app) {
 
       // Get public URL
       const { data: publicUrlData } = supabase.storage
-        .from('audio')
+        .from('audio_users')
         .getPublicUrl(filename);
 
       return reply.send({ url: publicUrlData.publicUrl, filename });
@@ -114,9 +113,7 @@ async function uploadRoutes(app) {
       console.error('Audio upload error:', err);
       return reply.status(500).send({
         error: 'Upload failed',
-        details: process.env.NODE_ENV !== 'production' || process.env.EXPOSE_ERROR_DETAILS === 'true'
-          ? err.message
-          : undefined,
+        details: exposeErrorDetails(request) ? err.message : undefined,
       });
     }
   });
