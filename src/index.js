@@ -5,6 +5,8 @@ const multipart = require('@fastify/multipart');
 const fastifyStatic = require('@fastify/static');
 const dotenv = require('dotenv');
 const path = require('path');
+const { query } = require('./db');
+const { exposeErrorDetails } = require('./debug');
 const { authRoutes } = require('./routes/auth');
 const { userRoutes } = require('./routes/users');
 const { swipeRoutes } = require('./routes/swipes');
@@ -66,7 +68,34 @@ await app.register(cors, {
   await app.register(wallRoutes, { prefix: '/api/wall' });
   await app.register(groupRoutes, { prefix: '/api/groups' });
 
-  app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+  // Health check with DB connectivity verification
+  app.get('/api/health', async (request, reply) => {
+    const start = Date.now();
+    let dbStatus = 'unknown';
+    let dbError = null;
+
+    try {
+      const res = await query('SELECT 1 AS ok');
+      dbStatus = res.rows[0]?.ok === 1 ? 'connected' : 'unexpected';
+    } catch (err) {
+      dbStatus = 'disconnected';
+      dbError = err.message;
+    }
+
+    const health = {
+      status: dbStatus === 'connected' ? 'ok' : 'degraded',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      db: {
+        status: dbStatus,
+        latency_ms: dbStatus === 'connected' ? Date.now() - start : null,
+        ...(dbError && exposeErrorDetails(request) ? { error: dbError } : {}),
+      },
+    };
+
+    const statusCode = dbStatus === 'connected' ? 200 : 503;
+    return reply.status(statusCode).send(health);
+  });
 
   try {
     await app.listen({ port: PORT, host: HOST });
