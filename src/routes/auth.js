@@ -195,7 +195,19 @@ async function authRoutes(app) {
       }
 
       const user = result.rows[0];
-      const valid = await bcrypt.compare(body.password, user.password);
+      let valid = await bcrypt.compare(body.password, user.password);
+
+      // Backward compatibility: pre-March 2025 clients sent SHA-256 hashed passwords
+      if (!valid) {
+        const crypto = require('crypto');
+        const sha256Hash = crypto.createHash('sha256').update(body.password).digest('hex');
+        valid = await bcrypt.compare(sha256Hash, user.password);
+        // Auto-migrate: re-hash as bcrypt(plaintext) for future logins
+        if (valid) {
+          const newHash = await bcrypt.hash(body.password, 12);
+          await query('UPDATE users SET password = $1 WHERE id = $2', [newHash, user.id]);
+        }
+      }
 
       if (!valid) {
         return reply.status(401).send({ error: 'Invalid email or password' });
