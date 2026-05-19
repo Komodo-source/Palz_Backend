@@ -5,10 +5,14 @@ const { exposeErrorDetails } = require('../debug');
 
 const sendMessageSchema = z.object({
   conversation_id: z.string().uuid(),
-  content: z.string().min(1).max(5000),
+  content: z.string().max(5000).default(''),
   message_type: z.string().default('text').optional(),
+  media_url: z.string().url().nullable().optional(),
   reply_to_message: z.string().uuid().nullable().optional(),
-});
+}).refine(
+  (data) => data.content.trim().length > 0 || (data.media_url && data.media_url.length > 0),
+  { message: 'Message must have content or media_url' }
+);
 
 const FREE_USER_MSG_LIMIT = 3;
 
@@ -220,16 +224,20 @@ async function messageRoutes(app) {
         }
       }
 
+      const msgType = body.media_url ? 'image' : (body.message_type || 'text');
+      // media_url column is jsonb — store URL as JSON string or null array
+      const mediaUrlJson = body.media_url ? JSON.stringify(body.media_url) : null;
       const result = await query(
-        `INSERT INTO messages (sender_id, conversation_id, content, message_type, reply_to_message)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO messages (sender_id, conversation_id, content, message_type, media_url, reply_to_message)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, sender_id, conversation_id, content, message_type,
                    media_url, is_seen, reply_to_message, created_at`,
         [
           userId,
           body.conversation_id,
-          body.content,
-          body.message_type || 'text',
+          body.content || '',
+          msgType,
+          mediaUrlJson,
           body.reply_to_message || null,
         ]
       );
