@@ -1,6 +1,9 @@
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
+const { supabase } = require('../supabase');
+
+const FREE_USER_MESSAGE_LIMIT = 3;
 
 // ── Predefined wall themes (rotate every 3 days) ──
 const WALL_THEMES = [
@@ -147,7 +150,7 @@ async function wallRoutes(app) {
       const userId = getUserId(request);
       const { id } = request.params;
 
-      const post = await query('SELECT id, user_initiator FROM wall WHERE id = $1', [id]);
+      const post = await query('SELECT id, user_initiator, wall_photo FROM wall WHERE id = $1', [id]);
 
       if (post.rows.length === 0) {
         return reply.status(404).send({ error: 'Post not found' });
@@ -157,11 +160,104 @@ async function wallRoutes(app) {
         return reply.status(403).send({ error: 'Not authorized to delete this post' });
       }
 
+      // Delete from DB first
       await query('DELETE FROM wall WHERE id = $1', [id]);
+
+      // Clean up Supabase Storage files (fire-and-forget — don't block the response)
+      try {
+        const photos = Array.isArray(post.rows[0].wall_photo) ? post.rows[0].wall_photo : JSON.parse(post.rows[0].wall_photo || '[]');
+        const filenames = photos
+          .map((url) => {
+            const match = String(url).match(/user_photos\/(.+)$/);
+            return match ? match[1] : null;
+          })
+          .filter(Boolean);
+
+        if (filenames.length > 0) {
+          await supabase.storage.from('user_photos').remove(filenames);
+        }
+      } catch (storageErr) {
+        console.error('Wall storage cleanup error (non-fatal):', storageErr);
+      }
 
       return reply.send({ deleted: true });
     } catch (err) {
       console.error('Wall delete error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── GET messages on a wall post ──
+  app.get('/post/:postId/messages', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const { postId } = request.params;
+
+      const result = await query(
+        `SELECT wm.id, wm.sender_id, wm.content, wm.created_at,
+                u.full_name AS sender_name, u.user_name AS sender_username,
+                u.profile_image AS sender_image
+         FROM wall_messages wm
+         JOIN users u ON u.id = wm.sender_id
+         WHERE wm.wall_post_id = $1
+         ORDER BY wm.created_at ASC`,
+        [postId]
+      );
+
+      return reply.send({ messages: result.rows });
+    } catch (err) {
+      console.error('Wall post messages error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── POST message on a wall post ──
+  // Free users: max 3 messages per post. Premium users: unlimited.
+  app.post('/post/:postId/message', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { postId } = request.params;
+      const { content } = request.body || {};
+
+      if (!content || typeof content !== 'string' || content.trim().length === 0) {
+        return reply.status(400).send({ error: 'content is required' });
+      }
+      if (content.length > 500) {
+        return reply.status(400).send({ error: 'Message too long (max 500 chars)' });
+      }
+
+      // Verify the post exists
+      const postCheck = await query('SELECT id, user_initiator FROM wall WHERE id = $1', [postId]);
+      if (postCheck.rows.length === 0) {
+        return reply.status(404).send({ error: 'Post not found' });
+      }
+
+      // Check premium status
+      const userResult = await query('SELECT is_premium FROM users WHERE id = $1', [userId]);
+      const isPremium = userResult.rows[0]?.is_premium === true;
+
+      if (!isPremium) {
+        const countResult = await query(
+          'SELECT COUNT(*)::int AS count FROM wall_messages WHERE wall_post_id = $1 AND sender_id = $2',
+          [postId, userId]
+        );
+        if (countResult.rows[0].count >= FREE_USER_MESSAGE_LIMIT) {
+          return reply.status(403).send({
+            error: `Free users can only send ${FREE_USER_MESSAGE_LIMIT} messages per wall post. Upgrade to premium for unlimited messages.`,
+            limit_reached: true,
+          });
+        }
+      }
+
+      const result = await query(
+        `INSERT INTO wall_messages (wall_post_id, sender_id, content)
+         VALUES ($1, $2, $3)
+         RETURNING id, wall_post_id, sender_id, content, created_at`,
+        [postId, userId, content.trim()]
+      );
+
+      return reply.status(201).send({ message: result.rows[0] });
+    } catch (err) {
+      console.error('Wall post message error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });

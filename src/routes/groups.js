@@ -513,6 +513,95 @@ async function groupRoutes(app) {
     }
   });
 
+  // ── POST vote on individual members ──
+  app.post('/member-vote', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weekly_group_id, votes } = request.body;
+      // votes: [{ member_id: uuid, keep: boolean }, ...]
+
+      if (!weekly_group_id || !Array.isArray(votes) || votes.length === 0) {
+        return reply.status(400).send({ error: 'weekly_group_id and votes[] are required' });
+      }
+
+      // Verify user is a member
+      const memberCheck = await query(
+        `SELECT 1 FROM weekly_groups wg
+         JOIN group_participants gp ON gp.group_id = wg.group_id
+         WHERE wg.id = $1 AND gp.user_id = $2`,
+        [weekly_group_id, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'You are not a member of this group' });
+      }
+
+      // Cannot vote on yourself
+      const othersOnly = votes.filter((v) => v.member_id !== userId);
+
+      for (const v of othersOnly) {
+        if (typeof v.keep !== 'boolean') continue;
+        await query(
+          `INSERT INTO member_votes (weekly_group_id, voter_id, member_id, keep)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (weekly_group_id, voter_id, member_id)
+           DO UPDATE SET keep = $4`,
+          [weekly_group_id, userId, v.member_id, v.keep]
+        );
+      }
+
+      return reply.send({ recorded: true });
+    } catch (err) {
+      console.error('Member vote error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── GET member vote results for the group ──
+  app.get('/:weeklyGroupId/member-votes', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weeklyGroupId } = request.params;
+
+      // Verify membership
+      const memberCheck = await query(
+        `SELECT 1 FROM weekly_groups wg
+         JOIN group_participants gp ON gp.group_id = wg.group_id
+         WHERE wg.id = $1 AND gp.user_id = $2`,
+        [weeklyGroupId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this group' });
+      }
+
+      // Aggregate: for each member, how many keep vs remove votes
+      const result = await query(
+        `SELECT mv.member_id,
+                u.full_name, u.user_name,
+                COUNT(*) FILTER (WHERE mv.keep = true)::int AS keep_votes,
+                COUNT(*) FILTER (WHERE mv.keep = false)::int AS remove_votes
+         FROM member_votes mv
+         JOIN users u ON u.id = mv.member_id
+         WHERE mv.weekly_group_id = $1
+         GROUP BY mv.member_id, u.full_name, u.user_name`,
+        [weeklyGroupId]
+      );
+
+      // Did this user already vote?
+      const myVotes = await query(
+        'SELECT member_id, keep FROM member_votes WHERE weekly_group_id = $1 AND voter_id = $2',
+        [weeklyGroupId, userId]
+      );
+
+      return reply.send({
+        member_votes: result.rows,
+        my_votes: myVotes.rows,
+      });
+    } catch (err) {
+      console.error('Member votes error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
   // ── PUT set rendezvous location/time ──
   app.put('/rendezvous', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
