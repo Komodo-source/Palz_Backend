@@ -3,8 +3,35 @@ const { getUserId } = require('../middleware/auth');
 const { supabase } = require('../supabase');
 const { exposeErrorDetails } = require('../debug');
 
+let sharp;
+try {
+  sharp = require('sharp');
+} catch {
+  // Sharp is optional — images upload without compression if not installed
+  sharp = null;
+}
+
+/**
+ * Compress an image buffer with Sharp if available.
+ * Resizes to max 1200px wide, converts to JPEG at 85% quality.
+ * Falls back to the original buffer if Sharp isn't installed.
+ */
+async function compressImage(buffer) {
+  if (!sharp) return { buffer, contentType: 'image/jpeg' };
+  try {
+    const compressed = await sharp(buffer)
+      .rotate()
+      .resize({ width: 1200, withoutEnlargement: true })
+      .jpeg({ quality: 85, progressive: true })
+      .toBuffer();
+    return { buffer: compressed, contentType: 'image/jpeg' };
+  } catch {
+    return { buffer, contentType: 'image/jpeg' };
+  }
+}
+
 async function uploadRoutes(app) {
-  // Upload profile image → Supabase "user_photos" bucket
+  // Upload profile/chat image → Supabase "user_photos" bucket
   app.post('/image', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
@@ -14,36 +41,32 @@ async function uploadRoutes(app) {
         return reply.status(400).send({ error: 'No file uploaded' });
       }
 
-      // Validate file type
-      const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+      const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'];
       if (!allowedMimes.includes(data.mimetype)) {
-        return reply.status(400).send({ error: 'Invalid image type. Allowed: JPEG, PNG, WebP, GIF' });
+        return reply.status(400).send({ error: 'Invalid image type. Allowed: JPEG, PNG, WebP, GIF, HEIC' });
       }
-
-      const ext = path.extname(data.filename) || '.jpg';
-      const filename = `img_${userId}_${Date.now()}${ext}`;
 
       // Read file into buffer
       const chunks = [];
       for await (const chunk of data.file) {
         chunks.push(chunk);
       }
-      const buffer = Buffer.concat(chunks);
+      const rawBuffer = Buffer.concat(chunks);
 
-      // Upload to Supabase storage
+      // Compress with Sharp (auto-rotates EXIF, resizes, converts to JPEG)
+      const { buffer, contentType } = await compressImage(rawBuffer);
+
+      const filename = `img_${userId}_${Date.now()}.jpg`;
+
       const { error: uploadError } = await supabase.storage
         .from('user_photos')
-        .upload(filename, buffer, {
-          contentType: data.mimetype,
-          upsert: false,
-        });
+        .upload(filename, buffer, { contentType, upsert: false });
 
       if (uploadError) {
         console.error('Supabase image upload error:', uploadError);
         return reply.status(500).send({ error: 'Upload failed', details: uploadError.message });
       }
 
-      // Get public URL
       const { data: publicUrlData } = supabase.storage
         .from('user_photos')
         .getPublicUrl(filename);
@@ -68,7 +91,6 @@ async function uploadRoutes(app) {
         return reply.status(400).send({ error: 'No file uploaded' });
       }
 
-      // Validate file type
       const allowedMimes = [
         'audio/m4a', 'audio/mp4', 'audio/mpeg', 'audio/aac',
         'audio/wav', 'audio/x-m4a', 'audio/x-wav',
@@ -83,14 +105,12 @@ async function uploadRoutes(app) {
       const ext = path.extname(data.filename) || '.m4a';
       const filename = `audio_${userId}_${Date.now()}${ext}`;
 
-      // Read file into buffer
       const chunks = [];
       for await (const chunk of data.file) {
         chunks.push(chunk);
       }
       const buffer = Buffer.concat(chunks);
 
-      // Upload to Supabase storage
       const { error: uploadError } = await supabase.storage
         .from('audio_users')
         .upload(filename, buffer, {
@@ -103,7 +123,6 @@ async function uploadRoutes(app) {
         return reply.status(500).send({ error: 'Upload failed', details: uploadError.message });
       }
 
-      // Get public URL
       const { data: publicUrlData } = supabase.storage
         .from('audio_users')
         .getPublicUrl(filename);
