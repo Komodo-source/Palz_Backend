@@ -118,6 +118,9 @@ async function authRoutes(app) {
 
       const token = app.jwt.sign({ id: user.id, email: user.email }, { expiresIn: '30d' });
 
+      // Log login event (fire-and-forget)
+      query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch(() => {});
+
       return reply.send({ user, token, isNewUser });
     } catch (err) {
       console.error('Google auth error:', err);
@@ -203,6 +206,9 @@ async function authRoutes(app) {
 
       delete user.password;
       const token = app.jwt.sign({ id: user.id, email: user.email }, { expiresIn: '30d' });
+
+      // Log login event (fire-and-forget)
+      query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch(() => {});
 
       return reply.send({ user, token });
     } catch (err) {
