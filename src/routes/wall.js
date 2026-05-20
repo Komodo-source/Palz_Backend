@@ -96,22 +96,40 @@ async function wallRoutes(app) {
       const cutoff = new Date(Date.now() - ONE_DAY_MS).toISOString();
       await query('DELETE FROM wall WHERE created_at < $1', [cutoff]);
 
-      const result = await query(
-        `SELECT w.id, w.user_initiator, w.wall_photo, w.created_at,
-                u.full_name AS user_full_name,
-                u.user_name, u.profile_image,
-                COUNT(DISTINCT wr.user_id)::int AS reaction_count,
-                COALESCE(BOOL_OR(wr.user_id = $3), false) AS has_reacted
-         FROM wall w
-         JOIN users u ON u.id = w.user_initiator
-         LEFT JOIN wall_reactions wr ON wr.post_id = w.id
-         WHERE w.theme_id = $1
-           AND w.created_at >= $2
-         GROUP BY w.id, u.full_name, u.user_name, u.profile_image
-         ORDER BY w.created_at DESC
-         LIMIT 50`,
-        [theme.id, cutoff, userId]
-      );
+      let result;
+      try {
+        result = await query(
+          `SELECT w.id, w.user_initiator, w.wall_photo, w.created_at,
+                  u.full_name AS user_full_name,
+                  u.user_name, u.profile_image,
+                  COUNT(DISTINCT wr.user_id)::int AS reaction_count,
+                  COALESCE(BOOL_OR(wr.user_id = $3), false) AS has_reacted
+           FROM wall w
+           JOIN users u ON u.id = w.user_initiator
+           LEFT JOIN wall_reactions wr ON wr.post_id = w.id
+           WHERE w.theme_id = $1
+             AND w.created_at >= $2
+           GROUP BY w.id, u.full_name, u.user_name, u.profile_image
+           ORDER BY w.created_at DESC
+           LIMIT 50`,
+          [theme.id, cutoff, userId]
+        );
+      } catch (_reactErr) {
+        // wall_reactions table not yet migrated — fall back without reactions
+        result = await query(
+          `SELECT w.id, w.user_initiator, w.wall_photo, w.created_at,
+                  u.full_name AS user_full_name,
+                  u.user_name, u.profile_image,
+                  0 AS reaction_count, false AS has_reacted
+           FROM wall w
+           JOIN users u ON u.id = w.user_initiator
+           WHERE w.theme_id = $1
+             AND w.created_at >= $2
+           ORDER BY w.created_at DESC
+           LIMIT 50`,
+          [theme.id, cutoff]
+        );
+      }
 
       return reply.send({ posts: result.rows, theme });
     } catch (err) {
@@ -294,18 +312,23 @@ async function wallRoutes(app) {
       const post = await query('SELECT id FROM wall WHERE id = $1', [id]);
       if (!post.rows.length) return reply.status(404).send({ error: 'Post not found' });
 
-      const existing = await query(
-        'SELECT 1 FROM wall_reactions WHERE post_id = $1 AND user_id = $2',
-        [id, userId]
-      );
+      try {
+        const existing = await query(
+          'SELECT 1 FROM wall_reactions WHERE post_id = $1 AND user_id = $2',
+          [id, userId]
+        );
 
-      if (existing.rows.length) {
-        await query('DELETE FROM wall_reactions WHERE post_id = $1 AND user_id = $2', [id, userId]);
-        return reply.send({ reacted: false });
+        if (existing.rows.length) {
+          await query('DELETE FROM wall_reactions WHERE post_id = $1 AND user_id = $2', [id, userId]);
+          return reply.send({ reacted: false });
+        }
+
+        await query('INSERT INTO wall_reactions (post_id, user_id) VALUES ($1, $2)', [id, userId]);
+        return reply.send({ reacted: true });
+      } catch (_reactErr) {
+        // wall_reactions table not yet migrated
+        return reply.status(503).send({ error: 'Reactions not available yet — run the wall_reactions migration.' });
       }
-
-      await query('INSERT INTO wall_reactions (post_id, user_id) VALUES ($1, $2)', [id, userId]);
-      return reply.send({ reacted: true });
     } catch (err) {
       console.error('Wall react error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
