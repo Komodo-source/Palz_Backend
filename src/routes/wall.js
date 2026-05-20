@@ -28,10 +28,7 @@ const WALL_THEMES = [
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Get or create the active theme for now.
- * Rotates themes every 3 days starting from a reference epoch.
- */
+
 async function getActiveTheme() {
   // Reference epoch: 2025-05-18 00:00:00 UTC
   const EPOCH = new Date('2025-05-18T00:00:00.000Z').getTime();
@@ -157,6 +154,11 @@ async function wallRoutes(app) {
          VALUES ($1, $2, $3)
          RETURNING id, user_initiator, wall_photo, theme_id, created_at`,
         [userId, JSON.stringify(wallPhoto), theme.id]
+      );
+
+      const update_nb_photos = await query(
+        `UPDATE users SET number_photo_posted = number_photo_posted + 1 WHERE id=$1`,
+        [userId]
       );
 
       return reply.status(201).send({ post: result.rows[0] });

@@ -182,6 +182,54 @@ async function userRoutes(app) {
     }
   });
 
+  app.get('/nb_relation', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+
+      const result = await query(
+        `SELECT COUNT(pc.id)
+         FROM users u
+         LEFT JOIN personal_conversations pc ON pc.user_initiator = u.id OR pc.user_receiver = u.id
+         WHERE u.id = $1`,
+        [userId]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.status(404).send({ error: 'error no data found' });
+      }
+
+      return reply.send({ nb_relation: result.rows[0] });
+    } catch (err) {
+      console.error('Get user error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  app.get('/nb_photo', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+
+      const result = await query(
+        `SELECT number_photo_posted
+         FROM users u
+         WHERE u.id = $1`,
+        [userId]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.status(404).send({ error: 'error no data found' });
+      }
+
+      return reply.send({ nb_photo: result.rows[0] });
+    } catch (err) {
+      console.error('Get user error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+
+
+
   app.put('/profile', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
