@@ -99,14 +99,18 @@ async function wallRoutes(app) {
       const result = await query(
         `SELECT w.id, w.user_initiator, w.wall_photo, w.created_at,
                 u.full_name AS user_full_name,
-                u.user_name, u.profile_image
+                u.user_name, u.profile_image,
+                COUNT(DISTINCT wr.user_id)::int AS reaction_count,
+                COALESCE(BOOL_OR(wr.user_id = $3), false) AS has_reacted
          FROM wall w
          JOIN users u ON u.id = w.user_initiator
+         LEFT JOIN wall_reactions wr ON wr.post_id = w.id
          WHERE w.theme_id = $1
            AND w.created_at >= $2
+         GROUP BY w.id, u.full_name, u.user_name, u.profile_image
          ORDER BY w.created_at DESC
          LIMIT 50`,
-        [theme.id, cutoff]
+        [theme.id, cutoff, userId]
       );
 
       return reply.send({ posts: result.rows, theme });
@@ -258,6 +262,52 @@ async function wallRoutes(app) {
       return reply.status(201).send({ message: result.rows[0] });
     } catch (err) {
       console.error('Wall post message error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+  // ── GET wall posts by a specific user (for profile page) ──
+  app.get('/user/:userId/posts', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const { userId: targetUserId } = request.params;
+      const result = await query(
+        `SELECT w.id, w.wall_photo, w.created_at, wt.title AS theme_title
+         FROM wall w
+         LEFT JOIN wall_themes wt ON wt.id = w.theme_id
+         WHERE w.user_initiator = $1
+         ORDER BY w.created_at DESC
+         LIMIT 9`,
+        [targetUserId]
+      );
+      return reply.send({ posts: result.rows });
+    } catch (err) {
+      console.error('Wall user posts error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── POST toggle flower reaction on a wall post ──
+  app.post('/post/:id/react', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { id } = request.params;
+
+      const post = await query('SELECT id FROM wall WHERE id = $1', [id]);
+      if (!post.rows.length) return reply.status(404).send({ error: 'Post not found' });
+
+      const existing = await query(
+        'SELECT 1 FROM wall_reactions WHERE post_id = $1 AND user_id = $2',
+        [id, userId]
+      );
+
+      if (existing.rows.length) {
+        await query('DELETE FROM wall_reactions WHERE post_id = $1 AND user_id = $2', [id, userId]);
+        return reply.send({ reacted: false });
+      }
+
+      await query('INSERT INTO wall_reactions (post_id, user_id) VALUES ($1, $2)', [id, userId]);
+      return reply.send({ reacted: true });
+    } catch (err) {
+      console.error('Wall react error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
