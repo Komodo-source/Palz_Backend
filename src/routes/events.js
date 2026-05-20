@@ -25,13 +25,20 @@ async function eventRoutes(app) {
   app.get('/', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      const { filter } = request.query; // 'today' | 'joined' | undefined
+      const { filter, category } = request.query; // filter: 'today' | 'joined', category: any VALID_CATEGORIES
 
+      const params = [userId];
       let extraWhere = '';
+
       if (filter === 'today') {
-        extraWhere = `AND DATE(e.starts_at AT TIME ZONE 'UTC') = CURRENT_DATE`;
+        extraWhere += ` AND DATE(e.starts_at AT TIME ZONE 'UTC') = CURRENT_DATE`;
       } else if (filter === 'joined') {
-        extraWhere = `AND EXISTS (SELECT 1 FROM event_members em2 WHERE em2.event_id = e.id AND em2.user_id = $1)`;
+        extraWhere += ` AND EXISTS (SELECT 1 FROM event_members em2 WHERE em2.event_id = e.id AND em2.user_id = $1)`;
+      }
+
+      if (category && VALID_CATEGORIES.includes(category)) {
+        params.push(category);
+        extraWhere += ` AND e.category = $${params.length}`;
       }
 
       const result = await query(
@@ -50,7 +57,7 @@ async function eventRoutes(app) {
          WHERE ${ACTIVE_FILTER} ${extraWhere}
          GROUP BY e.id, u.full_name, u.profile_image
          ORDER BY e.starts_at ASC`,
-        [userId]
+        params
       );
 
       return reply.send({ events: result.rows });
