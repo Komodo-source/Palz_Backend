@@ -12,6 +12,132 @@ const createGroupMessageSchema = z.object({
 
 const GROUP_SIZE = 5;
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTIVITY_TRIGGER_HOURS = 4; // suggest activities after this many hours
+
+// ── Activity suggestion catalogue ──
+const SPORT_ACTIVITIES = {
+  yoga:        { title: 'Cours de yoga ensemble',    icon: 'body-outline',          color: '#10B981' },
+  running:     { title: 'Footing en groupe',          icon: 'walk-outline',           color: '#EF4444' },
+  natation:    { title: 'Session piscine',            icon: 'water-outline',          color: '#3B82F6' },
+  tennis:      { title: 'Match de tennis',            icon: 'tennisball-outline',     color: '#F59E0B' },
+  danse:       { title: 'Cours de danse',             icon: 'musical-notes-outline',  color: '#8B5CF6' },
+  randonnée:   { title: 'Randonnée ensemble',         icon: 'leaf-outline',           color: '#22C55E' },
+  pilates:     { title: 'Pilates en groupe',          icon: 'body-outline',           color: '#10B981' },
+  vélo:        { title: 'Balade à vélo',              icon: 'bicycle-outline',        color: '#F97316' },
+  escalade:    { title: 'Escalade en salle',          icon: 'trending-up-outline',    color: '#92400E' },
+  volleyball:  { title: 'Match de volley',            icon: 'football-outline',       color: '#F59E0B' },
+  basketball:  { title: 'Match de basket',            icon: 'basketball-outline',     color: '#EF4444' },
+  padel:       { title: 'Partie de padel',            icon: 'tennisball-outline',     color: '#10B981' },
+};
+
+const HOBBY_ACTIVITIES = {
+  cuisine:      { title: 'Atelier cuisine maison',   icon: 'restaurant-outline',     color: '#10B981' },
+  cinéma:       { title: 'Soirée ciné',              icon: 'film-outline',           color: '#F59E0B' },
+  cinema:       { title: 'Soirée ciné',              icon: 'film-outline',           color: '#F59E0B' },
+  musique:      { title: 'Concert ou live music',    icon: 'musical-notes-outline',  color: '#8B5CF6' },
+  art:          { title: 'Atelier créatif',          icon: 'color-palette-outline',  color: '#EC4899' },
+  peinture:     { title: 'Atelier peinture',         icon: 'color-palette-outline',  color: '#EC4899' },
+  lecture:      { title: 'Book club & café',         icon: 'book-outline',           color: '#92400E' },
+  photographie: { title: 'Balade photo en ville',    icon: 'camera-outline',         color: '#6B7280' },
+  voyage:       { title: "Excursion d'une journée",  icon: 'airplane-outline',       color: '#3B82F6' },
+  gaming:       { title: 'Soirée gaming',            icon: 'game-controller-outline',color: '#7C3AED' },
+  méditation:   { title: 'Séance méditation',        icon: 'leaf-outline',           color: '#10B981' },
+  théâtre:      { title: 'Pièce de théâtre',         icon: 'mic-outline',            color: '#F59E0B' },
+  shopping:     { title: 'Shopping en groupe',       icon: 'bag-outline',            color: '#EC4899' },
+  jardinage:    { title: 'Jardin ou marché bio',     icon: 'flower-outline',         color: '#22C55E' },
+};
+
+const SOCIAL_DEFAULTS = [
+  { title: 'Brunch ou café',         icon: 'cafe-outline',         color: '#92400E', description: 'Pour mieux se connaître' },
+  { title: 'Pique-nique au parc',    icon: 'sunny-outline',        color: '#22C55E', description: 'Sortie nature détendue' },
+  { title: 'Escape game',            icon: 'lock-closed-outline',  color: '#8B5CF6', description: 'Défi et team building' },
+  { title: 'Bowling',                icon: 'trophy-outline',       color: '#3B82F6', description: 'Compétition amicale garantie' },
+  { title: 'Soirée cocktails',       icon: 'wine-outline',         color: '#EF4444', description: 'Détente et bonne humeur' },
+  { title: 'Marché local',           icon: 'storefront-outline',   color: '#F97316', description: 'Découverte et flânerie' },
+  { title: 'Karaoké',                icon: 'mic-outline',          color: '#8B5CF6', description: 'Bonne ambiance garantie' },
+  { title: 'Mini-golf',              icon: 'golf-outline',         color: '#22C55E', description: 'Casual et fun' },
+];
+
+function generateActivitySuggestions(members) {
+  const sportFreq = {};
+  const hobbyFreq = {};
+  const personalityTotals = { social_energy: 0, planning_style: 0, conversation_depth: 0 };
+  let personalityCount = 0;
+
+  for (const m of members) {
+    const interests = parseInterests(m.interests);
+    for (const s of (interests.sports || [])) {
+      const k = s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+      sportFreq[k] = (sportFreq[k] || 0) + 1;
+    }
+    for (const h of (interests.hobbies || [])) {
+      const k = h.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+      hobbyFreq[k] = (hobbyFreq[k] || 0) + 1;
+    }
+    if (interests.social_energy != null) {
+      personalityTotals.social_energy += Number(interests.social_energy) || 5;
+      personalityTotals.planning_style += Number(interests.planning_style) || 5;
+      personalityTotals.conversation_depth += Number(interests.conversation_depth) || 5;
+      personalityCount++;
+    }
+  }
+
+  const avgPersonality = personalityCount > 0
+    ? {
+        social_energy: personalityTotals.social_energy / personalityCount,
+        planning_style: personalityTotals.planning_style / personalityCount,
+        conversation_depth: personalityTotals.conversation_depth / personalityCount,
+      }
+    : { social_energy: 5, planning_style: 5, conversation_depth: 5 };
+
+  const suggestions = [];
+  const usedTitles = new Set();
+
+  // Add interest-based activities (needs ≥ 2 members sharing it)
+  const topSports = Object.entries(sportFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+  for (const [sport, count] of topSports) {
+    if (suggestions.length >= 2) break;
+    const template = SPORT_ACTIVITIES[sport];
+    if (template && !usedTitles.has(template.title)) {
+      suggestions.push({ ...template, description: `${count} membres aiment ça`, tag: 'sport' });
+      usedTitles.add(template.title);
+    }
+  }
+
+  const topHobbies = Object.entries(hobbyFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+  for (const [hobby, count] of topHobbies) {
+    if (suggestions.length >= 3) break;
+    const template = HOBBY_ACTIVITIES[hobby];
+    if (template && !usedTitles.has(template.title)) {
+      suggestions.push({ ...template, description: `${count} membres adorent ça`, tag: 'hobby' });
+      usedTitles.add(template.title);
+    }
+  }
+
+  // If we still need suggestions, use personality-driven defaults
+  // Shuffle defaults then pick ones suited to the group's personality
+  const shuffled = [...SOCIAL_DEFAULTS].sort(() => Math.random() - 0.5);
+  // Bias toward party/social if social_energy high
+  if (avgPersonality.social_energy >= 6) {
+    const partyFirst = shuffled.sort((a, b) => {
+      const partyTerms = ['cocktails', 'karaoké', 'soirée'];
+      const aParty = partyTerms.some(t => a.title.toLowerCase().includes(t)) ? -1 : 1;
+      const bParty = partyTerms.some(t => b.title.toLowerCase().includes(t)) ? -1 : 1;
+      return aParty - bParty;
+    });
+    for (const def of partyFirst) {
+      if (suggestions.length >= 4) break;
+      if (!usedTitles.has(def.title)) { suggestions.push({ ...def, tag: 'social' }); usedTitles.add(def.title); }
+    }
+  } else {
+    for (const def of shuffled) {
+      if (suggestions.length >= 4) break;
+      if (!usedTitles.has(def.title)) { suggestions.push({ ...def, tag: 'social' }); usedTitles.add(def.title); }
+    }
+  }
+
+  return suggestions.slice(0, 4);
+}
 
 /**
  * Find the best common interest label between two users.
@@ -109,11 +235,59 @@ async function groupRoutes(app) {
         voteSummary.total += r.count;
       });
 
+      // ── Activity suggestions (trigger after ACTIVITY_TRIGGER_HOURS) ──
+      let activitySuggestions = null;
+      let activityVotes = { counts: {}, my_votes: [] };
+
+      const hoursSinceStart = (Date.now() - new Date(group.week_start).getTime()) / 3600000;
+      if (hoursSinceStart >= ACTIVITY_TRIGGER_HOURS) {
+        const existingSugg = await query(
+          'SELECT suggestions FROM group_activity_suggestions WHERE weekly_group_id = $1',
+          [group.id]
+        );
+
+        if (existingSugg.rows.length === 0) {
+          // Fetch member interests for generation
+          const membersWithInterests = await query(
+            `SELECT u.interests FROM group_participants gp
+             JOIN users u ON u.id = gp.user_id
+             WHERE gp.group_id = $1`,
+            [group.group_id]
+          );
+          const generated = generateActivitySuggestions(membersWithInterests.rows);
+          await query(
+            'INSERT INTO group_activity_suggestions (weekly_group_id, suggestions) VALUES ($1, $2)',
+            [group.id, JSON.stringify(generated)]
+          );
+          activitySuggestions = generated;
+        } else {
+          activitySuggestions = existingSugg.rows[0].suggestions;
+        }
+
+        // Vote counts
+        const voteCounts = await query(
+          `SELECT suggestion_index, COUNT(*)::int AS count
+           FROM group_activity_votes WHERE weekly_group_id = $1
+           GROUP BY suggestion_index`,
+          [group.id]
+        );
+        const myVotes = await query(
+          'SELECT suggestion_index FROM group_activity_votes WHERE weekly_group_id = $1 AND user_id = $2',
+          [group.id, userId]
+        );
+        activityVotes = {
+          counts: voteCounts.rows.reduce((acc, r) => { acc[r.suggestion_index] = r.count; return acc; }, {}),
+          my_votes: myVotes.rows.map((r) => r.suggestion_index),
+        };
+      }
+
       return reply.send({
         group: {
           ...group,
           members: membersResult.rows,
           vote_summary: voteSummary,
+          activity_suggestions: activitySuggestions,
+          activity_votes: activityVotes,
         },
       });
     } catch (err) {
@@ -633,6 +807,100 @@ async function groupRoutes(app) {
       return reply.send({ updated: true });
     } catch (err) {
       console.error('Rendezvous error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+  // ── POST toggle vote on an activity suggestion ──
+  app.post('/:weeklyGroupId/activity-vote', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weeklyGroupId } = request.params;
+      const { suggestion_index } = request.body;
+
+      if (suggestion_index == null || typeof suggestion_index !== 'number') {
+        return reply.status(400).send({ error: 'suggestion_index (number) is required' });
+      }
+
+      // Verify membership
+      const memberCheck = await query(
+        `SELECT 1 FROM weekly_groups wg
+         JOIN group_participants gp ON gp.group_id = wg.group_id
+         WHERE wg.id = $1 AND gp.user_id = $2`,
+        [weeklyGroupId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this group' });
+      }
+
+      // Toggle: delete if exists, insert if not
+      const existing = await query(
+        'SELECT id FROM group_activity_votes WHERE weekly_group_id = $1 AND user_id = $2 AND suggestion_index = $3',
+        [weeklyGroupId, userId, suggestion_index]
+      );
+
+      if (existing.rows.length > 0) {
+        await query(
+          'DELETE FROM group_activity_votes WHERE weekly_group_id = $1 AND user_id = $2 AND suggestion_index = $3',
+          [weeklyGroupId, userId, suggestion_index]
+        );
+        return reply.send({ voted: false });
+      } else {
+        await query(
+          'INSERT INTO group_activity_votes (weekly_group_id, user_id, suggestion_index) VALUES ($1, $2, $3)',
+          [weeklyGroupId, userId, suggestion_index]
+        );
+        return reply.send({ voted: true });
+      }
+    } catch (err) {
+      console.error('Activity vote error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── POST dissolution feedback (group rating + member personality ratings) ──
+  app.post('/dissolution-feedback', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weekly_group_id, group_rating, member_ratings } = request.body;
+
+      if (!weekly_group_id) {
+        return reply.status(400).send({ error: 'weekly_group_id is required' });
+      }
+
+      if (group_rating != null) {
+        await query(
+          `INSERT INTO group_dissolution_feedback (weekly_group_id, reviewer_id, group_rating)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (weekly_group_id, reviewer_id)
+           DO UPDATE SET group_rating = $3`,
+          [weekly_group_id, userId, group_rating]
+        );
+      }
+
+      for (const mr of (Array.isArray(member_ratings) ? member_ratings : [])) {
+        if (!mr.member_id || mr.member_id === userId) continue;
+        await query(
+          `INSERT INTO member_personality_ratings
+             (weekly_group_id, reviewer_id, member_id,
+              spontaneous_vs_planner, sporty_vs_chill, party_vs_coffee, deep_vs_casual)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (weekly_group_id, reviewer_id, member_id)
+           DO UPDATE SET
+             spontaneous_vs_planner = $4, sporty_vs_chill = $5,
+             party_vs_coffee = $6, deep_vs_casual = $7`,
+          [
+            weekly_group_id, userId, mr.member_id,
+            mr.spontaneous_vs_planner ?? null,
+            mr.sporty_vs_chill ?? null,
+            mr.party_vs_coffee ?? null,
+            mr.deep_vs_casual ?? null,
+          ]
+        );
+      }
+
+      return reply.send({ submitted: true });
+    } catch (err) {
+      console.error('Dissolution feedback error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
