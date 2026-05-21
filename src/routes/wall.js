@@ -5,7 +5,6 @@ const { supabase } = require('../supabase');
 
 const FREE_USER_MESSAGE_LIMIT = 3;
 
-// ── Predefined wall themes (rotate every 3 days) ──
 const WALL_THEMES = [
   'Poste ton animal de compagnie 🐾',
   'Ton plus beau sourire 😊',
@@ -26,7 +25,6 @@ const WALL_THEMES = [
 ];
 
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 
 async function getActiveTheme() {
@@ -83,14 +81,13 @@ async function wallRoutes(app) {
     }
   });
 
-  // ── GET wall posts for active theme ──
   app.get('/posts', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
       const theme = await getActiveTheme();
 
-      // Auto-delete posts older than 24 hours before fetching
-      const cutoff = new Date(Date.now() - ONE_DAY_MS).toISOString();
+      //delete in 3 days
+      const cutoff = new Date(Date.now() - THREE_DAYS_MS).toISOString();
       await query('DELETE FROM wall WHERE created_at < $1', [cutoff]);
 
       let result;

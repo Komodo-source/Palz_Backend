@@ -16,6 +16,7 @@ const { uploadRoutes } = require('./routes/uploads');
 const { wallRoutes } = require('./routes/wall');
 const { groupRoutes } = require('./routes/groups');
 const { eventRoutes } = require('./routes/events');
+const { paymentRoutes } = require('./routes/payments');
 
 dotenv.config();
 
@@ -69,6 +70,7 @@ await app.register(cors, {
   await app.register(wallRoutes, { prefix: '/api/wall' });
   await app.register(groupRoutes, { prefix: '/api/groups' });
   await app.register(eventRoutes, { prefix: '/api/events' });
+  await app.register(paymentRoutes, { prefix: '/api/payments' });
 
   // Health check with DB connectivity verification
   app.get('/api/health', async (request, reply) => {
