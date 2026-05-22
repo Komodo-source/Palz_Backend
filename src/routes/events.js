@@ -30,8 +30,8 @@ async function eventRoutes(app) {
       const params = [userId];
       let extraWhere = '';
 
-      if (filter === 'today') {
-        extraWhere += ` AND DATE(e.starts_at AT TIME ZONE 'UTC') = CURRENT_DATE`;
+      if (filter === 'tonight') {
+        extraWhere += ` AND e.starts_at >= date_trunc('day', now() AT TIME ZONE 'UTC') + INTERVAL '18 hours' AND e.starts_at <  date_trunc('day', now() AT TIME ZONE 'UTC') + INTERVAL '1 day'`;
       } else if (filter === 'joined') {
         extraWhere += ` AND EXISTS (SELECT 1 FROM event_members em2 WHERE em2.event_id = e.id AND em2.user_id = $1)`;
       }

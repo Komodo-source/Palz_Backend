@@ -296,13 +296,11 @@ async function groupRoutes(app) {
     }
   });
 
-  // ── POST generate/join a weekly group (KNN-based matching) ──
+  // ── POST generate/join a weekly group ──
+  //eh ouais des KNN
   app.post('/generate', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-
-      // Check if user already has ANY weekly group this week (active or not)
-      // Also check if user created a group this week (owner) even if they left it
       const now = new Date().toISOString();
 
       const existingAsParticipant = await query(
@@ -367,23 +365,22 @@ async function groupRoutes(app) {
 
       const candidates = candidatesResult.rows;
 
-      // Score candidates against the current user
+      //score
       const scored = candidates.map((c) => ({
         candidate: c,
         score: scoreCandidate(me, c),
       }));
 
-      // Filter by proximity (must be within 15km)
+      //filtre de proximité -- 30dm
       const nearby = scored.filter((s) => {
         if (!me.latitude || !me.longitude || !s.candidate.latitude || !s.candidate.longitude) return false;
         const dist = haversineKm(
           parseFloat(me.latitude), parseFloat(me.longitude),
           parseFloat(s.candidate.latitude), parseFloat(s.candidate.longitude)
         );
-        return dist <= 15;
+        return dist <= 30;
       });
 
-      // Sort by score and take top GROUP_SIZE-1 (plus current user = GROUP_SIZE)
       nearby.sort((a, b) => b.score - a.score);
       const selectedCandidates = nearby.slice(0, GROUP_SIZE - 1);
 

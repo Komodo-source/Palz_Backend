@@ -1,7 +1,16 @@
 const path = require('path');
 const { getUserId } = require('../middleware/auth');
 const { supabase } = require('../supabase');
+const { query } = require('../db');
 const { exposeErrorDetails } = require('../debug');
+
+function sanitizeName(name) {
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .substring(0, 50) || 'user';
+}
 
 let sharp;
 try {
@@ -130,6 +139,80 @@ async function uploadRoutes(app) {
       return reply.send({ url: publicUrlData.publicUrl, filename });
     } catch (err) {
       console.error('Audio upload error:', err);
+      return reply.status(500).send({
+        error: 'Upload failed',
+        details: exposeErrorDetails(request) ? err.message : undefined,
+      });
+    }
+  });
+  // Upload video verification → Supabase "video_verifications" bucket
+  app.post('/video-verification', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+
+      // Fetch the user's full_name to embed in the filename
+      const userResult = await query('SELECT full_name FROM users WHERE id = $1', [userId]);
+      if (userResult.rows.length === 0) {
+        return reply.status(404).send({ error: 'User not found' });
+      }
+      const fullName = userResult.rows[0].full_name || 'user';
+
+      // Allow up to 200 MB for a verification video
+      const data = await request.file({ limits: { fileSize: 200 * 1024 * 1024 } });
+
+      if (!data) {
+        return reply.status(400).send({ error: 'No file uploaded' });
+      }
+
+      const allowedMimes = [
+        'video/mp4', 'video/quicktime', 'video/x-msvideo',
+        'video/webm', 'video/3gpp', 'video/mpeg',
+      ];
+      if (!allowedMimes.includes(data.mimetype)) {
+        return reply.status(400).send({
+          error: 'Invalid video type. Allowed: MP4, MOV, AVI, WebM, 3GP, MPEG',
+        });
+      }
+
+      const ext = path.extname(data.filename) || '.mp4';
+      const safeName = sanitizeName(fullName);
+      const filename = `verification_${safeName}_${userId}_${Date.now()}${ext}`;
+
+      const chunks = [];
+      for await (const chunk of data.file) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+
+      const { error: uploadError } = await supabase.storage
+        .from('video_verifications')
+        .upload(filename, buffer, {
+          contentType: data.mimetype,
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('Supabase video upload error:', uploadError);
+        return reply.status(500).send({ error: 'Upload failed', details: uploadError.message });
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from('video_verifications')
+        .getPublicUrl(filename);
+
+      const videoUrl = publicUrlData.publicUrl;
+
+      // Persist URL and set status to pending admin review
+      await query(
+        `UPDATE users
+         SET video_verification_url = $1, video_verification_status = 'pending', updated_at = NOW()
+         WHERE id = $2`,
+        [videoUrl, userId]
+      );
+
+      return reply.send({ url: videoUrl, filename, status: 'pending' });
+    } catch (err) {
+      console.error('Video verification upload error:', err);
       return reply.status(500).send({
         error: 'Upload failed',
         details: exposeErrorDetails(request) ? err.message : undefined,
