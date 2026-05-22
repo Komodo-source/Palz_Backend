@@ -84,16 +84,16 @@ function scoreCandidate(user, candidate) {
   const candSports = candInterests.sports || [];
   const candHobbies = candInterests.hobbies || [];
 
-  // 1. Personality compatibility (strongest signal — 50 %)
+  //Personnalité avec le test fait en inscription
   const personalityScore = calculateInterestDistance(userInterests, candInterests);
 
-  // 2. Shared hobbies (20 %)
+  // 2. hobbies partagé
   const hobbiesScore = getCommonItems(userHobbies, candHobbies);
 
-  // 3. Shared sports (20 %)
+  // 3. sports partagé
   const sportsScore = getCommonItems(userSports, candSports);
 
-  // 4. Geographic proximity (10 %)
+  // 4. proximité géographique
   let distanceScore = 0;
   if (user.latitude && user.longitude && candidate.latitude && candidate.longitude) {
     const dist = haversineKm(
@@ -103,7 +103,7 @@ function scoreCandidate(user, candidate) {
     distanceScore = Math.max(0, 1 - dist / MAX_DISTANCE_KM);
   }
 
-  // 5. Zodiac (5 % — tie-breaker only)
+  // 5. astrology sign
   const zodiacScore = checkZodiacCompatibility(user.astrology_title, candidate.astrology_title) ? 1 : 0;
 
   return (
