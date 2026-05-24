@@ -17,6 +17,8 @@ const updateProfileSchema = z.object({
   date_of_birth: z.string().optional(),
   profile_image: z.any().optional(),
   interests: z.any().optional(),
+  sports: z.array(z.string()).optional(),
+  hobbies: z.array(z.string()).optional(),
   voice_fun_fact: z.string().nullable().optional(),
   search_radius: z.number().int().min(1).max(500).optional(),
   age_min_filter: z.number().int().min(13).max(100).optional(),
@@ -235,14 +237,16 @@ async function userRoutes(app) {
       const userId = getUserId(request);
       const body = updateProfileSchema.parse(request.body);
 
+      // Pull out junction-table fields — they are not columns on the users table
+      const { sports, hobbies, ...userFields } = body;
+
       const fields = [];
       const values = [];
       let paramIndex = 1;
 
-      for (const [key, value] of Object.entries(body)) {
+      for (const [key, value] of Object.entries(userFields)) {
         if (value !== undefined) {
-          const snakeKey = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-          fields.push(`${snakeKey} = $${paramIndex}`);
+          fields.push(`${key} = $${paramIndex}`);
           values.push(
             key === 'profile_image' || key === 'interests'
               ? JSON.stringify(value)
@@ -252,22 +256,69 @@ async function userRoutes(app) {
         }
       }
 
-      if (fields.length === 0) {
-        return reply.status(400).send({ error: 'No fields to update' });
+      let user = null;
+
+      if (fields.length > 0) {
+        values.push(userId);
+        const result = await query(
+          `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex}
+           RETURNING id, full_name, user_name, email, date_of_birth, phone, profile_image,
+                     bio, work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified,
+                     is_premium, location, home_location, latitude, longitude,
+                     search_radius, age_min_filter, age_max_filter, ready_to_go, updated_at`,
+          values
+        );
+        user = result.rows[0];
       }
 
-      values.push(userId);
+      // Sports — replace all existing entries for this user
+      if (sports !== undefined) {
+        await query('DELETE FROM user_sports WHERE user_id = $1', [userId]);
+        if (sports.length > 0) {
+          const sportsRows = await query(
+            `SELECT id, title FROM sports WHERE title = ANY($1)`,
+            [sports]
+          );
+          for (const row of sportsRows.rows) {
+            await query(
+              'INSERT INTO user_sports (user_id, sport_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+              [userId, row.id]
+            );
+          }
+        }
+      }
 
-      const result = await query(
-        `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex}
-         RETURNING id, full_name, user_name, email, date_of_birth, phone, profile_image,
-                   bio, work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified,
-                   is_premium, location, home_location, latitude, longitude,
-                   search_radius, age_min_filter, age_max_filter, ready_to_go, updated_at`,
-        values
-      );
+      // Hobbies — replace all existing entries for this user
+      if (hobbies !== undefined) {
+        await query('DELETE FROM user_hobbies WHERE user_id = $1', [userId]);
+        if (hobbies.length > 0) {
+          const hobbiesRows = await query(
+            `SELECT id, title FROM hobbies WHERE title = ANY($1)`,
+            [hobbies]
+          );
+          for (const row of hobbiesRows.rows) {
+            await query(
+              'INSERT INTO user_hobbies (user_id, hobby_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+              [userId, row.id]
+            );
+          }
+        }
+      }
 
-      return reply.send({ user: result.rows[0] });
+      // If only sports/hobbies were updated, fetch the user to return
+      if (!user) {
+        const result = await query(
+          `SELECT id, full_name, user_name, email, date_of_birth, phone, profile_image,
+                  bio, work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified,
+                  is_premium, location, home_location, latitude, longitude,
+                  search_radius, age_min_filter, age_max_filter, ready_to_go, updated_at
+           FROM users WHERE id = $1`,
+          [userId]
+        );
+        user = result.rows[0];
+      }
+
+      return reply.send({ user });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });

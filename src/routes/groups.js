@@ -14,7 +14,6 @@ const GROUP_SIZE = 5;
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVITY_TRIGGER_HOURS = 4; // suggest activities after this many hours
 
-// ── Activity suggestion catalogue ──
 const SPORT_ACTIVITIES = {
   yoga:        { title: 'Cours de yoga ensemble',    icon: 'body-outline',          color: '#10B981' },
   running:     { title: 'Footing en groupe',          icon: 'walk-outline',           color: '#EF4444' },
@@ -93,7 +92,7 @@ function generateActivitySuggestions(members) {
   const suggestions = [];
   const usedTitles = new Set();
 
-  // Add interest-based activities (needs ≥ 2 members sharing it)
+  //génère un intérêt qui a au moins 2 user qui aime ça
   const topSports = Object.entries(sportFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
   for (const [sport, count] of topSports) {
     if (suggestions.length >= 2) break;
