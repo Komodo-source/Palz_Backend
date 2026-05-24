@@ -3,7 +3,14 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY || '');
+let _stripe = null;
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) return null;
+  if (!_stripe) {
+    _stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+  }
+  return _stripe;
+}
 
 async function paymentRoutes(fastify) {
 
@@ -22,7 +29,8 @@ async function paymentRoutes(fastify) {
       if (!user) return reply.status(404).send({ error: 'User not found' });
       if (user.is_premium) return reply.status(400).send({ error: 'Already premium', already_premium: true });
 
-      if (!process.env.STRIPE_SECRET_KEY) {
+      const stripe = getStripe();
+      if (!stripe) {
         return reply.status(503).send({ error: 'Stripe not configured on this server' });
       }
       if (!process.env.STRIPE_PRICE_ID) {
@@ -88,6 +96,11 @@ async function paymentRoutes(fastify) {
         return reply.status(400).send({ error: 'payment_intent_id is required' });
       }
 
+      const stripe = getStripe();
+      if (!stripe) {
+        return reply.status(503).send({ error: 'Stripe not configured on this server' });
+      }
+
       const pi = await stripe.paymentIntents.retrieve(payment_intent_id);
       if (pi.status !== 'succeeded') {
         return reply.status(402).send({ error: 'Payment not yet confirmed', status: pi.status });
@@ -137,6 +150,11 @@ async function paymentRoutes(fastify) {
 
       if (!subId) return reply.status(404).send({ error: 'No active subscription found' });
 
+      const stripe = getStripe();
+      if (!stripe) {
+        return reply.status(503).send({ error: 'Stripe not configured on this server' });
+      }
+
       await stripe.subscriptions.cancel(subId);
       await query(
         'UPDATE users SET is_premium = false, stripe_subscription_id = NULL, premium_expires_at = NOW() WHERE id = $1',
@@ -164,6 +182,10 @@ async function paymentRoutes(fastify) {
       let event;
 
       if (process.env.STRIPE_WEBHOOK_SECRET && sig) {
+        const stripe = getStripe();
+        if (!stripe) {
+          return reply.status(503).send({ error: 'Stripe not configured on this server' });
+        }
         try {
           event = stripe.webhooks.constructEvent(request.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
         } catch (err) {

@@ -4,8 +4,8 @@
   "description": "Palz - Friend Meeting App Backend",
   "main": "src/index.js",
   "scripts": {
-    "dev": "node index.js",
-    "start": "node index.js"
+    "dev": "node src/index.js",
+    "start": "node src/index.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
