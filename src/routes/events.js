@@ -25,7 +25,7 @@ async function eventRoutes(app) {
   app.get('/', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      const { filter, category } = request.query; // filter: 'today' | 'joined', category: any VALID_CATEGORIES
+      const { filter, category } = request.query; 
 
       const params = [userId];
       let extraWhere = '';
