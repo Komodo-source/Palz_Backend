@@ -20,6 +20,13 @@ const updateProfileSchema = z.object({
   sports: z.array(z.string()).optional(),
   hobbies: z.array(z.string()).optional(),
   voice_fun_fact: z.string().nullable().optional(),
+  prompt_question: z.string().nullable().optional(),
+  prompt_answer: z.string().max(150).nullable().optional(),
+  labels: z.object({
+    vibe: z.array(z.string()).optional(),
+    dispo: z.array(z.string()).optional(),
+    irl: z.array(z.string()).optional(),
+  }).optional(),
   search_radius: z.number().int().min(1).max(500).optional(),
   age_min_filter: z.number().int().min(13).max(100).optional(),
   age_max_filter: z.number().int().min(13).max(100).optional(),
@@ -105,6 +112,7 @@ async function userRoutes(app) {
                 u.latitude, u.longitude,
                 a.name AS astrology_title,
                 u.is_premium, u.created_at,
+                u.labels, u.reliability_score,
                 jsonb_agg(DISTINCT s.title) FILTER (WHERE s.title IS NOT NULL) AS sports,
                 jsonb_agg(DISTINCT h.title) FILTER (WHERE h.title IS NOT NULL) AS hobbies
               FROM users u
@@ -132,7 +140,8 @@ async function userRoutes(app) {
                       u.bio, u.work, u.situation, u.location, u.interests,
                       u.latitude, u.longitude,
                       a.name,
-                      u.is_premium, u.created_at
+                      u.is_premium, u.created_at,
+                      u.labels, u.reliability_score
               LIMIT 50`,
         [userId]
       );
@@ -168,10 +177,21 @@ async function userRoutes(app) {
         `SELECT u.id, u.full_name, u.user_name, u.date_of_birth, u.profile_image, u.bio,
                 u.work, u.situation, u.location, u.home_location, u.astrology_sign_id,
                 a.name AS astrology_title,
-                u.interests, u.is_premium, u.is_verified, u.created_at
+                u.interests, u.is_premium, u.is_verified, u.created_at, u.voice_fun_fact,
+                u.prompt_question, u.prompt_answer, u.labels, u.reliability_score,
+                jsonb_agg(DISTINCT s.title) FILTER (WHERE s.title IS NOT NULL) AS sports,
+                jsonb_agg(DISTINCT h.title) FILTER (WHERE h.title IS NOT NULL) AS hobbies
          FROM users u
          LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
-         WHERE u.id = $1`,
+         LEFT JOIN user_sports us ON us.user_id = u.id
+         LEFT JOIN sports s ON s.id = us.sport_id
+         LEFT JOIN user_hobbies uh ON uh.user_id = u.id
+         LEFT JOIN hobbies h ON h.id = uh.hobby_id
+         WHERE u.id = $1
+         GROUP BY u.id, u.full_name, u.user_name, u.date_of_birth, u.profile_image, u.bio,
+                  u.work, u.situation, u.location, u.home_location, u.astrology_sign_id,
+                  a.name, u.interests, u.is_premium, u.is_verified, u.created_at, u.voice_fun_fact,
+                  u.prompt_question, u.prompt_answer, u.labels, u.reliability_score`,
         [id]
       );
 
@@ -250,7 +270,7 @@ async function userRoutes(app) {
         if (value !== undefined) {
           fields.push(`${key} = $${paramIndex}`);
           values.push(
-            key === 'profile_image' || key === 'interests'
+            key === 'profile_image' || key === 'interests' || key === 'labels'
               ? JSON.stringify(value)
               : value
           );
