@@ -878,18 +878,19 @@ async function groupRoutes(app) {
         await query(
           `INSERT INTO member_personality_ratings
              (weekly_group_id, reviewer_id, member_id,
-              spontaneous_vs_planner, sporty_vs_chill, party_vs_coffee, deep_vs_casual)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+              spontaneous_vs_planner, sporty_vs_chill, party_vs_coffee, deep_vs_casual, group_role)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (weekly_group_id, reviewer_id, member_id)
            DO UPDATE SET
              spontaneous_vs_planner = $4, sporty_vs_chill = $5,
-             party_vs_coffee = $6, deep_vs_casual = $7`,
+             party_vs_coffee = $6, deep_vs_casual = $7, group_role = $8`,
           [
             weekly_group_id, userId, mr.member_id,
             mr.spontaneous_vs_planner ?? null,
             mr.sporty_vs_chill ?? null,
             mr.party_vs_coffee ?? null,
             mr.deep_vs_casual ?? null,
+            mr.group_role ?? null,
           ]
         );
       }
