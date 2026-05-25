@@ -158,6 +158,8 @@ async function userRoutes(app) {
     }
   });
 
+
+
   app.get('/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const { id } = request.params;
@@ -187,7 +189,7 @@ async function userRoutes(app) {
   app.get('/nb_relation', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      
+
       const result = await query(
         `SELECT COUNT(pc.id)
          FROM users u

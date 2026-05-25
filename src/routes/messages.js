@@ -14,6 +14,109 @@ const sendMessageSchema = z.object({
   { message: 'Message must have content or media_url' }
 );
 
+const IceBreakerSchema = z.object({
+  UserId: z.string().uuid(),
+  targetUserId: z.string().uuid(),
+});
+
+const ICE_BREAKER = {
+    "Yoga": [
+      "Tu pratiques plutôt le Hatha, le Vinyasa ou l'Ashtanga ?",
+      "Fais-tu du yoga principalement pour la souplesse ou pour la méditation ?",
+      "As-tu déjà fait une retraite de yoga ?"
+    ],
+    "Pilates": [
+      "Tu pratiques sur tapis ou sur machine comme le Reformer ?",
+      "As-tu remarqué une vraie différence sur ta posture depuis que tu as commencé ?",
+      "Qu'est-ce qui t'a poussé à essayer le Pilates au départ ?"
+    ],
+    "Escalade": [
+      "Tu fais plutôt du bloc en salle ou de la voie en extérieur ?",
+      "Quel est le niveau ou la cotation que tu essaies de passer en ce moment ?",
+      "Quel est ton spot de grimpe rêvé dans le monde ?"
+    ],
+    "Randonnée": [
+      "Quel est le plus beau chemin ou GR que tu aies fait ?",
+      "Tu pars plutôt pour la journée ou sur plusieurs jours avec bivouac ?",
+      "Préfères-tu la moyenne montagne ou les sentiers côtiers ?"
+    ],
+    "Danse": [
+      "Quel style de danse pratiques-tu ?",
+      "Tu as commencé la danse quand tu étais enfant ou sur le tard ?",
+      "Quelle est la chorégraphie ou le spectacle qui t'a le plus impressionné(e) ?"
+    ],
+    "Fitness": [
+      "Tu as une routine plutôt axée cardio ou renforcement musculaire ?",
+      "Tu t'entraînes en salle ou à la maison ?",
+      "Quels sont tes objectifs sportifs du moment ?"
+    ],
+    "Photographie": [
+      "Tu shootes plutôt au smartphone, au réflex numérique ou à l'argentique ?",
+      "Quel est ton sujet préféré : paysages, portraits ou street photo ?",
+      "As-tu une photo dont tu es particulièrement fier/fière ?"
+    ],
+    "Cuisine": [
+      "Quel est le plat 'signature' que tu cuisines pour tes invités ?",
+      "Tu es plutôt bec sucré ou bec salé quand tu cuisines ?",
+      "Quelle cuisine du monde aimes-tu le plus préparer ?"
+    ],
+    "Lecture": [
+      "Quel est le dernier livre que tu as dévoré ?",
+      "Tu préfères les romans de fiction, les essais ou les biographies ?",
+      "Tu es plutôt livre papier ou liseuse électronique ?"
+    ],
+    "Tennis": [
+      "As-tu suivi le dernier Roland-Garros ?",
+      "Tu préfères jouer sur terre battue, sur gazon ou sur dur ?",
+      "Quel est ton joueur ou ta joueuse de légende préféré ?"
+    ],
+    "Course à pied": [
+      "Tu prépares un marathon ou un semi en ce moment ?",
+      "Tu es plutôt course en nature (trail) ou sur route ?",
+      "Quel est ton record personnel ou ta distance de prédilection ?"
+    ],
+    "Natation": [
+      "Tu nages plutôt en piscine ou tu aimes l'eau libre ?",
+      "Quelle est ta nage de spécialité ?",
+      "Combien de longueurs fais-tu en moyenne par séance ?"
+    ],
+    "Cyclisme": [
+      "Tu es plutôt vélo de route, VTT ou gravel ?",
+      "As-tu suivi les étapes du Tour de France cette année ?",
+      "Quel est le col ou le parcours le plus difficile que tu aies grimpé ?"
+    ],
+    "Football": [
+      "Quelle est ton équipe de cœur ?",
+      "Tu joues plutôt en club ou juste entre amis le dimanche ?",
+      "Quel est le plus beau but que tu aies vu en direct à la télé ou au stade ?"
+    ],
+    "Basketball": [
+      "Tu suis plutôt la NBA ou le championnat européen ?",
+      "Tu joues à quel poste sur le terrain ?",
+      "Qui est le meilleur joueur de tous les temps selon toi, Jordan ou LeBron ?"
+    ],
+    "Volleyball": [
+      "Tu joues en salle ou tu préfères le beach-volley l'été ?",
+      "Quel est ton poste de prédilection : passeur, attaquant ou libéro ?",
+      "As-tu déjà assisté à un match de volley professionnel ?"
+    ],
+    "Arts martiaux": [
+      "Quelle discipline pratiques-tu exactement ?",
+      "Depuis combien de temps es-tu sur les tatamis ?",
+      "As-tu déjà fait de la compétition ?"
+    ],
+    "Ski": [
+      "Tu es plutôt ski alpin, ski de fond ou snowboard ?",
+      "Quelle est ta station de ski préférée ?",
+      "Tu as déjà fait du hors-piste ou tu restes sagement sur les pistes rouges ?"
+    ],
+    "Surf": [
+      "Quel est le meilleur spot où tu aies surfé ?",
+      "Tu préfères les longboards ou les shortboards ?",
+      "As-tu déjà fait un 'surf trip' à l'étranger ?"
+    ]
+};
+
 const FREE_USER_MSG_LIMIT = 3;
 
 async function messageRoutes(app) {
@@ -21,6 +124,7 @@ async function messageRoutes(app) {
   // ── POST start or get a conversation with any user ──
   // Used by wall (tapping a poster) and any place a DM needs to be opened without a prior match.
   // Free users are limited to 3 outgoing messages in conversations where there is no mutual like.
+
   app.post('/start', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
@@ -180,6 +284,51 @@ async function messageRoutes(app) {
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
+
+
+  app.post('/generate_personnal_iceBreaker', { preHandler: [app.authenticate] }, async (request, reply) => {
+      try{
+        const userId = getUserId(request);
+
+        const { targetUserId } = IceBreakerSchema.parse(request.body);
+
+        const userResult = await query(
+          `SELECT u.is_premium
+          FROM users u
+          WHERE u.id = $1`,
+          [userId]
+        );
+        if(userResult.rows[0]?.is_premium === false){
+          return reply.status(403).send({ error: 'Pas d\'ice breaker pour les membres non premium' });
+        }
+
+        const sports_hobbies = await query(
+          `SELECT s.title, h.title
+          FROM users u
+          INNER JOIN  user_sports us ON us.user_id = u.id
+          INNER JOIN  sports s ON us.sport_id = s.id
+          INNER JOIN  user_hobbies uh ON uh.user_id = u.id
+          INNER JOIN  hobbies h ON uh.hobby_id = h.id
+          WHERE u.id = $1`,
+          [targetUserId]
+        );
+        let iceBreakerArray = [];
+        for (let i = 0; i < 3; i++) {
+          let topicChosen = sports_hobbies.rows[Math.random() * sports_hobbies.rows.length-1];
+          iceBreakerArray.push(ICE_BREAKER.topicChosen[Math.random() * 3]);
+        }
+         return reply.status(201).send({ message: iceBreakerArray });
+
+      } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.status(400).send({ error: 'Validation failed', details: err.errors });
+      }
+      console.error('Send message error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+    }
+  )
+
 
   app.post('/send', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
