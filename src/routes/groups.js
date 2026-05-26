@@ -6,8 +6,9 @@ const { scoreCandidate, haversineKm, parseInterests } = require('../matching');
 
 const createGroupMessageSchema = z.object({
   weekly_group_id: z.string().uuid(),
-  content: z.string().min(1).max(5000),
+  content: z.string().max(5000).optional().default(''),
   message_type: z.string().default('text').optional(),
+  media_url: z.string().optional(),
 });
 
 const GROUP_SIZE = 5;
@@ -667,10 +668,10 @@ async function groupRoutes(app) {
       }
 
       const result = await query(
-        `INSERT INTO group_messages (group_id, sender_id, content, message_type)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO group_messages (group_id, sender_id, content, message_type, media_url)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id, group_id, sender_id, content, message_type, media_url, created_at`,
-        [body.weekly_group_id, userId, body.content, body.message_type || 'text']
+        [body.weekly_group_id, userId, body.content || '', body.message_type || 'text', body.media_url || null]
       );
 
       return reply.status(201).send({ message: result.rows[0] });
