@@ -19,6 +19,12 @@ const IceBreakerSchema = z.object({
   targetUserId: z.string().uuid(),
 });
 
+
+const streakSchema = z.object({
+  conversationId: z.string().uuid(),
+});
+
+
 const ICE_BREAKER = {
     "Yoga": [
       "Tu pratiques plutôt le Hatha, le Vinyasa ou l'Ashtanga ?",
@@ -202,7 +208,7 @@ async function messageRoutes(app) {
 
       const result = await query(
         `SELECT
-           pc.id,
+           pc.id, pc.streak,
            CASE
              WHEN pc.user_initiator = $1 THEN u2.id
              ELSE u1.id
@@ -242,6 +248,53 @@ async function messageRoutes(app) {
       return reply.send({ conversations: result.rows });
     } catch (err) {
       console.error('Conversations error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+
+  app.post('/update_streak', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const body = streakSchema.parse(request.body);
+      const conversation_id = body.conversationId;
+
+      const result = await query(
+        `SELECT streak, streak_last_date FROM personal_conversations WHERE id = $1`,
+        [conversation_id]
+      );
+      const row = result.rows[0];
+      if (!row) return reply.status(404).send({ error: 'Conversation not found' });
+
+      // Compare dates at day granularity using Postgres DATE type
+      const todayResult = await query(`SELECT CURRENT_DATE AS today`);
+      const today = todayResult.rows[0].today; // 'YYYY-MM-DD' string
+
+      const lastDate = row.streak_last_date
+        ? new Date(row.streak_last_date).toISOString().split('T')[0]
+        : null;
+
+      if (lastDate === today) {
+        return reply.send({ streak: row.streak });
+      }
+
+      let newStreak;
+      if (!lastDate) {
+        newStreak = 1;
+      } else {
+        const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+        newStreak = lastDate === yesterday ? row.streak + 1 : 1;
+      }
+
+      await query(
+        `UPDATE personal_conversations
+         SET streak = $1, streak_last_date = CURRENT_DATE, updated_at = NOW()
+         WHERE id = $2`,
+        [newStreak, conversation_id]
+      );
+
+      return reply.send({ streak: newStreak });
+    } catch (err) {
+      console.error('Update streak error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
