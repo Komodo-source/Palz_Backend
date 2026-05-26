@@ -287,47 +287,53 @@ async function messageRoutes(app) {
 
 
   app.post('/generate_personnal_iceBreaker', { preHandler: [app.authenticate] }, async (request, reply) => {
-      try{
-        const userId = getUserId(request);
-
-        const { targetUserId } = IceBreakerSchema.parse(request.body);
-
-        const userResult = await query(
-          `SELECT u.is_premium
-          FROM users u
-          WHERE u.id = $1`,
-          [userId]
-        );
-        if(userResult.rows[0]?.is_premium === false){
-          return reply.status(403).send({ error: 'Pas d\'ice breaker pour les membres non premium' });
-        }
-
-        const sports_hobbies = await query(
-          `SELECT s.title, h.title
-          FROM users u
-          INNER JOIN  user_sports us ON us.user_id = u.id
-          INNER JOIN  sports s ON us.sport_id = s.id
-          INNER JOIN  user_hobbies uh ON uh.user_id = u.id
-          INNER JOIN  hobbies h ON uh.hobby_id = h.id
-          WHERE u.id = $1`,
-          [targetUserId]
-        );
-        let iceBreakerArray = [];
-        for (let i = 0; i < 3; i++) {
-          let topicChosen = sports_hobbies.rows[Math.random() * sports_hobbies.rows.length-1];
-          iceBreakerArray.push(ICE_BREAKER.topicChosen[Math.random() * 3]);
-        }
-         return reply.status(201).send({ message: iceBreakerArray });
-
-      } catch (err) {
-      if (err instanceof z.ZodError) {
-        return reply.status(400).send({ error: 'Validation failed', details: err.errors });
+    try {
+      const { other_user_id } = request.body || {};
+      if (!other_user_id) {
+        return reply.status(400).send({ error: 'other_user_id is required' });
       }
-      console.error('Send message error:', err);
+
+      const FALLBACK = [
+        "Qu'est-ce qui t'a donné le sourire cette semaine ?",
+        "Si tu pouvais voyager quelque part ce week-end, où irais-tu ?",
+        "Quel est ton restaurant ou café préféré du moment ?",
+        "Qu'est-ce que tu fais pour décompresser après une longue journée ?",
+        "Tu as découvert quelque chose de cool dernièrement ?",
+        "Ta série ou film du moment ?",
+        "Un truc que tu as appris récemment qui t'a surprise ?",
+      ];
+
+      const [sportsRes, hobbiesRes] = await Promise.all([
+        query(
+          `SELECT s.title FROM user_sports us JOIN sports s ON s.id = us.sport_id WHERE us.user_id = $1`,
+          [other_user_id]
+        ),
+        query(
+          `SELECT h.title FROM user_hobbies uh JOIN hobbies h ON h.id = uh.hobby_id WHERE uh.user_id = $1`,
+          [other_user_id]
+        ),
+      ]);
+
+      const topics = [
+        ...sportsRes.rows.map(r => r.title),
+        ...hobbiesRes.rows.map(r => r.title),
+      ].filter(t => ICE_BREAKER[t]);
+
+      let message;
+      if (topics.length > 0) {
+        const topic = topics[Math.floor(Math.random() * topics.length)];
+        const questions = ICE_BREAKER[topic];
+        message = questions[Math.floor(Math.random() * questions.length)];
+      } else {
+        message = FALLBACK[Math.floor(Math.random() * FALLBACK.length)];
+      }
+
+      return reply.status(201).send({ message });
+    } catch (err) {
+      console.error('Ice breaker error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
-    }
-  )
+  })
 
 
   app.post('/send', { preHandler: [app.authenticate] }, async (request, reply) => {

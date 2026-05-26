@@ -251,7 +251,7 @@ async function eventRoutes(app) {
       }
 
       const result = await query(
-        `SELECT em.id, em.event_id, em.sender_id, em.content, em.created_at,
+        `SELECT em.id, em.event_id, em.sender_id, em.content, em.message_type, em.media_url, em.created_at,
                 u.full_name AS sender_name, u.user_name AS sender_username,
                 u.profile_image AS sender_image
          FROM event_messages em
@@ -274,10 +274,14 @@ async function eventRoutes(app) {
     try {
       const userId = getUserId(request);
       const { id } = request.params;
-      const { content } = request.body || {};
+      const { content, message_type = 'text', media_url } = request.body || {};
 
-      if (!content || !String(content).trim()) {
+      const isVoice = message_type === 'voice';
+      if (!isVoice && (!content || !String(content).trim())) {
         return reply.status(400).send({ error: 'content is required' });
+      }
+      if (isVoice && !media_url) {
+        return reply.status(400).send({ error: 'media_url is required for voice messages' });
       }
 
       const memberCheck = await query(
@@ -289,10 +293,10 @@ async function eventRoutes(app) {
       }
 
       const result = await query(
-        `INSERT INTO event_messages (event_id, sender_id, content)
-         VALUES ($1, $2, $3)
-         RETURNING id, event_id, sender_id, content, created_at`,
-        [id, userId, String(content).trim()]
+        `INSERT INTO event_messages (event_id, sender_id, content, message_type, media_url)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, event_id, sender_id, content, message_type, media_url, created_at`,
+        [id, userId, isVoice ? '' : String(content).trim(), message_type, media_url || null]
       );
 
       return reply.status(201).send({ message: result.rows[0] });
