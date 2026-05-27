@@ -125,6 +125,113 @@ async function eventRoutes(app) {
     }
   });
 
+  // GET /events/suggested — suggest event ideas based on season + user interests
+  app.get('/suggested', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const month = new Date().getMonth();
+      const season = month >= 2 && month <= 4 ? 'printemps'
+        : month >= 5 && month <= 7 ? 'été'
+        : month >= 8 && month <= 10 ? 'automne'
+        : 'hiver';
+
+      const interestsRes = await query(
+        `SELECT h.name AS name FROM user_hobbies uh
+         JOIN hobbies h ON h.id = uh.hobby_id WHERE uh.user_id = $1
+         UNION ALL
+         SELECT s.name AS name FROM user_sports us
+         JOIN sports s ON s.id = us.sport_id WHERE us.user_id = $1`,
+        [userId]
+      );
+
+      const interests = interestsRes.rows.map((r) => r.name.toLowerCase());
+
+      const INTEREST_CATEGORY = {
+        football: 'sport', basket: 'sport', tennis: 'sport', yoga: 'sport',
+        natation: 'sport', running: 'sport', escalade: 'sport', danse: 'sport',
+        randonnée: 'parc', nature: 'parc', jardinage: 'parc',
+        cinéma: 'cinema', films: 'cinema',
+        cuisine: 'restaurant', gastronomie: 'restaurant',
+        soirées: 'bar', musique: 'bar',
+        plage: 'plage', surf: 'plage',
+      };
+
+      const SEASON_BASE = {
+        printemps: [
+          { category: 'parc', title: 'Pique-nique au parc', reason: 'Parfait pour le printemps ☀️' },
+          { category: 'sport', title: 'Sport en plein air', reason: 'Profite du beau temps' },
+          { category: 'cafe', title: 'Brunch en terrasse', reason: 'Les terrasses réouvrent !' },
+        ],
+        été: [
+          { category: 'plage', title: 'Journée plage', reason: 'La saison de la plage 🌊' },
+          { category: 'bar', title: 'Apéro rooftop', reason: 'Les longues soirées d\'été' },
+          { category: 'parc', title: 'Ciné en plein air', reason: 'Les nuits sont douces' },
+        ],
+        automne: [
+          { category: 'cinema', title: 'Soirée cinéma', reason: 'La saison des films est là 🎬' },
+          { category: 'restaurant', title: 'Dîner cosy', reason: 'Plats chauds de saison' },
+          { category: 'bowling', title: 'Soirée bowling', reason: 'Activité indoor parfaite' },
+        ],
+        hiver: [
+          { category: 'cinema', title: 'Marathon ciné', reason: 'Longues soirées d\'hiver 🎥' },
+          { category: 'restaurant', title: 'Raclette entre amies', reason: 'Le classique hivernal 🧀' },
+          { category: 'cafe', title: 'Chocolat chaud & café', reason: 'Cosy et chaleureux ☕' },
+        ],
+      };
+
+      const CAT_TITLE = {
+        bar: 'Soirée bar', bowling: 'Bowling entre amies', cinema: 'Sortie cinéma',
+        restaurant: 'Dîner entre amies', sport: 'Session sport', cafe: 'Café & discussion',
+        plage: 'Journée plage', parc: 'Sortie au parc', autre: 'Activité surprise',
+      };
+
+      const suggestions = [...(SEASON_BASE[season] || SEASON_BASE.hiver)];
+      const interestCats = [...new Set(interests.map((i) => INTEREST_CATEGORY[i]).filter(Boolean))];
+      interestCats.slice(0, 2).forEach((cat) => {
+        if (!suggestions.find((s) => s.category === cat)) {
+          suggestions.push({ category: cat, title: CAT_TITLE[cat] || 'Activité', reason: 'Selon tes intérêts ✨' });
+        }
+      });
+
+      return reply.send({ suggestions: suggestions.slice(0, 5), season });
+    } catch (err) {
+      console.error('Suggested events error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // PATCH /events/:id/rsvp — update RSVP status
+  app.patch('/:id/rsvp', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { id } = request.params;
+      const { status } = request.body || {};
+
+      const VALID = ['coming', 'maybe', 'unavailable'];
+      if (!VALID.includes(status)) {
+        return reply.status(400).send({ error: 'Statut invalide. Valeurs : coming, maybe, unavailable' });
+      }
+
+      const memberCheck = await query(
+        'SELECT 1 FROM event_members WHERE event_id = $1 AND user_id = $2',
+        [id, userId]
+      );
+      if (!memberCheck.rows.length) {
+        return reply.status(403).send({ error: "Tu n'es pas membre de cet événement." });
+      }
+
+      await query(
+        'UPDATE event_members SET rsvp_status = $1 WHERE event_id = $2 AND user_id = $3',
+        [status, id, userId]
+      );
+
+      return reply.send({ rsvp_status: status });
+    } catch (err) {
+      console.error('RSVP error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
   // GET /events/:id — event details + members list
   app.get('/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
@@ -140,7 +247,8 @@ async function eventRoutes(app) {
            u.full_name AS creator_name,
            u.profile_image AS creator_image,
            COUNT(DISTINCT em.user_id)::int AS member_count,
-           BOOL_OR(em.user_id = $2) AS is_joined
+           BOOL_OR(em.user_id = $2) AS is_joined,
+           (SELECT rsvp_status FROM event_members WHERE event_id = e.id AND user_id = $2) AS my_rsvp
          FROM events e
          JOIN users u ON u.id = e.creator_id
          LEFT JOIN event_members em ON em.event_id = e.id
@@ -154,7 +262,7 @@ async function eventRoutes(app) {
       }
 
       const membersRes = await query(
-        `SELECT u.id, u.full_name, u.user_name, u.profile_image, em.joined_at
+        `SELECT u.id, u.full_name, u.user_name, u.profile_image, em.joined_at, em.rsvp_status
          FROM event_members em
          JOIN users u ON u.id = em.user_id
          WHERE em.event_id = $1
