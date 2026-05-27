@@ -432,8 +432,7 @@ async function messageRoutes(app) {
         }
       }
 
-      const msgType = body.media_url ? 'image' : (body.message_type || 'text');
-      // media_url column is jsonb — store URL as JSON string or null array
+      const msgType = body.message_type || 'text';
       const mediaUrlJson = body.media_url ? JSON.stringify(body.media_url) : null;
       const result = await query(
         `INSERT INTO messages (sender_id, conversation_id, content, message_type, media_url, reply_to_message)

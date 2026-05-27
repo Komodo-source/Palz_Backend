@@ -120,12 +120,19 @@ async function uploadRoutes(app) {
       }
       const buffer = Buffer.concat(chunks);
 
-      const { error: uploadError } = await supabase.storage
+      let { error: uploadError } = await supabase.storage
         .from('audio_users')
         .upload(filename, buffer, {
           contentType: data.mimetype,
           upsert: false,
         });
+
+      if (uploadError?.message?.toLowerCase().includes('bucket') || uploadError?.statusCode === '404') {
+        await supabase.storage.createBucket('audio_users', { public: true });
+        ({ error: uploadError } = await supabase.storage
+          .from('audio_users')
+          .upload(filename, buffer, { contentType: data.mimetype, upsert: false }));
+      }
 
       if (uploadError) {
         console.error('Supabase audio upload error:', uploadError);

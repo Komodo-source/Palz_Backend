@@ -228,7 +228,7 @@ async function authRoutes(app) {
         `SELECT id, full_name, user_name, email, date_of_birth, phone, profile_image, bio,
                 work, situation, astrology_sign_id, interests, voice_fun_fact, is_verified, is_premium,
                 location, home_location, latitude, longitude, search_radius,
-                girls_filter, events_filter, age_min_filter, age_max_filter,
+                girls_filter, events_filter, age_min_filter, age_max_filter,labels,
                 ready_to_go, created_at, updated_at
          FROM users WHERE id = $1`,
         [userId]
