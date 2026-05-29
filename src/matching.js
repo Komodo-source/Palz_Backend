@@ -71,6 +71,23 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.asin(Math.sqrt(a));
 }
 
+
+  async function get_weather(city){
+    try{
+
+      const apiKey = '0c27d67d5ad3c0a1e608f12a8b5180d7';
+      let query = city || "Paris,FR";
+      const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(query)}&units=metric&lang=fr&appid=${apiKey}`);
+      if (!res.ok) throw new Error('Weather fetch failed');
+      const data = await res.json();
+      const humidity = data.main.humidity;
+      const temperature = data.main.temp;
+      return {humidity, temperature};
+    }catch(err){
+      return null;
+    }
+  }
+
 /**
  * Score a candidate against the current user.
  * Returns a number 0..1 where higher = better match.
@@ -124,4 +141,5 @@ module.exports = {
   scoreCandidate,
   MAX_DISTANCE_KM,
   MAX_INTEREST_DISTANCE,
+  get_weather
 };

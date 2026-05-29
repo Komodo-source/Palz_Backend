@@ -2,7 +2,7 @@ const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
-const { scoreCandidate, haversineKm, parseInterests } = require('../matching');
+const { scoreCandidate, haversineKm, parseInterests, get_weather } = require('../matching');
 
 const createGroupMessageSchema = z.object({
   weekly_group_id: z.string().uuid(),
@@ -16,46 +16,46 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVITY_TRIGGER_HOURS = 4; // suggest activities after this many hours
 
 const SPORT_ACTIVITIES = {
-  yoga:        { title: 'Cours de yoga ensemble',    icon: 'body-outline',          color: '#10B981' },
-  running:     { title: 'Footing en groupe',          icon: 'walk-outline',           color: '#EF4444' },
-  natation:    { title: 'Session piscine',            icon: 'water-outline',          color: '#3B82F6' },
-  tennis:      { title: 'Match de tennis',            icon: 'tennisball-outline',     color: '#F59E0B' },
-  danse:       { title: 'Cours de danse',             icon: 'musical-notes-outline',  color: '#8B5CF6' },
-  randonnée:   { title: 'Randonnée ensemble',         icon: 'leaf-outline',           color: '#22C55E' },
-  pilates:     { title: 'Pilates en groupe',          icon: 'body-outline',           color: '#10B981' },
-  vélo:        { title: 'Balade à vélo',              icon: 'bicycle-outline',        color: '#F97316' },
-  escalade:    { title: 'Escalade en salle',          icon: 'trending-up-outline',    color: '#92400E' },
-  volleyball:  { title: 'Match de volley',            icon: 'football-outline',       color: '#F59E0B' },
-  basketball:  { title: 'Match de basket',            icon: 'basketball-outline',     color: '#EF4444' },
-  padel:       { title: 'Partie de padel',            icon: 'tennisball-outline',     color: '#10B981' },
+  yoga:        { title: 'Cours de yoga ensemble',    icon: 'body-outline',          color: '#10B981', humidity: [0, 80],  temperature: [15, 35] },
+  running:     { title: 'Footing en groupe',         icon: 'walk-outline',          color: '#EF4444', humidity: [0, 70],  temperature: [-5, 25] },
+  natation:    { title: 'Session piscine',           icon: 'water-outline',         color: '#3B82F6', humidity: [0, 100], temperature: [20, 40] },
+  tennis:      { title: 'Match de tennis',           icon: 'tennisball-outline',    color: '#F59E0B', humidity: [0, 70],  temperature: [10, 30] },
+  danse:       { title: 'Cours de danse',            icon: 'musical-notes-outline', color: '#8B5CF6', humidity: [0, 80],  temperature: [15, 30] },
+  randonnée:   { title: 'Randonnée ensemble',        icon: 'leaf-outline',          color: '#22C55E', humidity: [0, 70],  temperature: [5, 25]  },
+  pilates:     { title: 'Pilates en groupe',         icon: 'body-outline',          color: '#10B981', humidity: [0, 80],  temperature: [15, 30] },
+  vélo:        { title: 'Balade à vélo',             icon: 'bicycle-outline',       color: '#F97316', humidity: [0, 70],  temperature: [10, 30] },
+  escalade:    { title: 'Escalade en salle',         icon: 'trending-up-outline',   color: '#92400E', humidity: [0, 80],  temperature: [15, 30] },
+  volleyball:  { title: 'Match de volley',           icon: 'football-outline',      color: '#F59E0B', humidity: [0, 70],  temperature: [15, 35] },
+  basketball:  { title: 'Match de basket',           icon: 'basketball-outline',    color: '#EF4444', humidity: [0, 80],  temperature: [10, 35] },
+  padel:       { title: 'Partie de padel',           icon: 'tennisball-outline',    color: '#10B981', humidity: [0, 70],  temperature: [10, 35] },
 };
 
 const HOBBY_ACTIVITIES = {
-  cuisine:      { title: 'Atelier cuisine maison',   icon: 'restaurant-outline',     color: '#10B981' },
-  cinéma:       { title: 'Soirée ciné',              icon: 'film-outline',           color: '#F59E0B' },
-  cinema:       { title: 'Soirée ciné',              icon: 'film-outline',           color: '#F59E0B' },
-  musique:      { title: 'Concert ou live music',    icon: 'musical-notes-outline',  color: '#8B5CF6' },
-  art:          { title: 'Atelier créatif',          icon: 'color-palette-outline',  color: '#EC4899' },
-  peinture:     { title: 'Atelier peinture',         icon: 'color-palette-outline',  color: '#EC4899' },
-  lecture:      { title: 'Book club & café',         icon: 'book-outline',           color: '#92400E' },
-  photographie: { title: 'Balade photo en ville',    icon: 'camera-outline',         color: '#6B7280' },
-  voyage:       { title: "Excursion d'une journée",  icon: 'airplane-outline',       color: '#3B82F6' },
-  gaming:       { title: 'Soirée gaming',            icon: 'game-controller-outline',color: '#7C3AED' },
-  méditation:   { title: 'Séance méditation',        icon: 'leaf-outline',           color: '#10B981' },
-  théâtre:      { title: 'Pièce de théâtre',         icon: 'mic-outline',            color: '#F59E0B' },
-  shopping:     { title: 'Shopping en groupe',       icon: 'bag-outline',            color: '#EC4899' },
-  jardinage:    { title: 'Jardin ou marché bio',     icon: 'flower-outline',         color: '#22C55E' },
+  cuisine:      { title: 'Atelier cuisine maison',   icon: 'restaurant-outline',    color: '#10B981', humidity: [0, 80],  temperature: [10, 35] },
+  cinéma:       { title: 'Soirée ciné',              icon: 'film-outline',          color: '#F59E0B', humidity: [0, 100], temperature: [-10, 40] },
+  cinema:       { title: 'Soirée ciné',              icon: 'film-outline',          color: '#F59E0B', humidity: [0, 100], temperature: [-10, 40] },
+  musique:      { title: 'Concert ou live music',    icon: 'musical-notes-outline', color: '#8B5CF6', humidity: [0, 80],  temperature: [10, 35] },
+  art:          { title: 'Atelier créatif',          icon: 'color-palette-outline', color: '#EC4899', humidity: [0, 80],  temperature: [15, 35] },
+  peinture:     { title: 'Atelier peinture',         icon: 'color-palette-outline', color: '#EC4899', humidity: [0, 80],  temperature: [15, 35] },
+  lecture:      { title: 'Book club & café',         icon: 'book-outline',          color: '#92400E', humidity: [0, 100], temperature: [-10, 40] },
+  photographie: { title: 'Balade photo en ville',    icon: 'camera-outline',        color: '#6B7280', humidity: [0, 60],  temperature: [5, 30]  },
+  voyage:       { title: "Excursion d'une journée",  icon: 'airplane-outline',      color: '#3B82F6', humidity: [0, 70],  temperature: [10, 30] },
+  gaming:       { title: 'Soirée gaming',            icon: 'game-controller-outline',color: '#7C3AED', humidity: [0, 100], temperature: [-10, 40] },
+  méditation:   { title: 'Séance méditation',        icon: 'leaf-outline',          color: '#10B981', humidity: [0, 80],  temperature: [15, 35] },
+  théâtre:      { title: 'Pièce de théâtre',         icon: 'mic-outline',           color: '#F59E0B', humidity: [0, 100], temperature: [-10, 40] },
+  shopping:     { title: 'Shopping en groupe',       icon: 'bag-outline',           color: '#EC4899', humidity: [0, 80],  temperature: [5, 35]  },
+  jardinage:    { title: 'Jardin ou marché bio',     icon: 'flower-outline',        color: '#22C55E', humidity: [0, 70],  temperature: [10, 30] },
 };
 
 const SOCIAL_DEFAULTS = [
-  { title: 'Brunch ou café',         icon: 'cafe-outline',         color: '#92400E', description: 'Pour mieux se connaître' },
-  { title: 'Pique-nique au parc',    icon: 'sunny-outline',        color: '#22C55E', description: 'Sortie nature détendue' },
-  { title: 'Escape game',            icon: 'lock-closed-outline',  color: '#8B5CF6', description: 'Défi et team building' },
-  { title: 'Bowling',                icon: 'trophy-outline',       color: '#3B82F6', description: 'Compétition amicale garantie' },
-  { title: 'Soirée cocktails',       icon: 'wine-outline',         color: '#EF4444', description: 'Détente et bonne humeur' },
-  { title: 'Marché local',           icon: 'storefront-outline',   color: '#F97316', description: 'Découverte et flânerie' },
-  { title: 'Karaoké',                icon: 'mic-outline',          color: '#8B5CF6', description: 'Bonne ambiance garantie' },
-  { title: 'Mini-golf',              icon: 'golf-outline',         color: '#22C55E', description: 'Casual et fun' },
+  { title: 'Brunch ou café',       icon: 'cafe-outline',         color: '#92400E', description: 'Pour mieux se connaître',     humidity: [0, 100], temperature: [-10, 40] },
+  { title: 'Pique-nique au parc',  icon: 'sunny-outline',        color: '#22C55E', description: 'Sortie nature détendue',      humidity: [0, 60],  temperature: [15, 30]  },
+  { title: 'Escape game',          icon: 'lock-closed-outline',  color: '#8B5CF6', description: 'Défi et team building',       humidity: [0, 100], temperature: [-10, 40] },
+  { title: 'Bowling',              icon: 'trophy-outline',       color: '#3B82F6', description: 'Compétition amicale garantie',humidity: [0, 100], temperature: [-10, 40] },
+  { title: 'Soirée cocktails',     icon: 'wine-outline',         color: '#EF4444', description: 'Détente et bonne humeur',     humidity: [0, 100], temperature: [-10, 40] },
+  { title: 'Marché local',         icon: 'storefront-outline',   color: '#F97316', description: 'Découverte et flânerie',      humidity: [0, 70],  temperature: [10, 30]  },
+  { title: 'Karaoké',              icon: 'mic-outline',          color: '#8B5CF6', description: 'Bonne ambiance garantie',     humidity: [0, 100], temperature: [-10, 40] },
+  { title: 'Mini-golf',            icon: 'golf-outline',         color: '#22C55E', description: 'Casual et fun',               humidity: [0, 60],  temperature: [15, 30]  },
 ];
 
 function generateActivitySuggestions(members) {
@@ -63,6 +63,7 @@ function generateActivitySuggestions(members) {
   const hobbyFreq = {};
   const personalityTotals = { social_energy: 0, planning_style: 0, conversation_depth: 0 };
   let personalityCount = 0;
+  const { humidity, teemperature } = get_weather("");
 
   for (const m of members) {
     const interests = parseInterests(m.interests);
@@ -97,7 +98,14 @@ function generateActivitySuggestions(members) {
   const topSports = Object.entries(sportFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
   for (const [sport, count] of topSports) {
     if (suggestions.length >= 2) break;
-    const template = SPORT_ACTIVITIES[sport];
+    let telokate;
+    if(humidity !== null){
+      if (SPORT_ACTIVITIES[sport].humidity.includes(humidity) && SPORT_ACTIVITIES[sport].temperature.includes(temperature)){
+        template = SPORT_ACTIVITIES[sport];
+      }
+    }else{
+      template = SPORT_ACTIVITIES[sport];
+    }
     if (template && !usedTitles.has(template.title)) {
       suggestions.push({ ...template, description: `${count} membres aiment ça`, tag: 'sport' });
       usedTitles.add(template.title);
@@ -107,7 +115,13 @@ function generateActivitySuggestions(members) {
   const topHobbies = Object.entries(hobbyFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
   for (const [hobby, count] of topHobbies) {
     if (suggestions.length >= 3) break;
-    const template = HOBBY_ACTIVITIES[hobby];
+    let template
+
+    if(HOBBY_ACTIVITIES[hobby].humidity.includes(humidity) && HOBBY_ACTIVITIES[hobby].temperature.includes(temperature)){
+      template = HOBBY_ACTIVITIES[hobby]
+    }else{
+      template = HOBBY_ACTIVITIES[hobby];
+    }
     if (template && !usedTitles.has(template.title)) {
       suggestions.push({ ...template, description: `${count} membres adorent ça`, tag: 'hobby' });
       usedTitles.add(template.title);
@@ -246,7 +260,16 @@ async function groupRoutes(app) {
           [group.id]
         );
 
-        if (existingSugg.rows.length === 0) {
+        let date_creation_suggestion = existingSugg.rows[0].generated_at;
+        // "2026-05-25 12:14:53.986381+00"
+
+        const createdAt = new Date(date_creation_suggestion);
+        const today = new Date();
+
+        const diffMs = today - createdAt;
+        const oneDayMs = 24 * 60 * 60 * 1000;
+
+        if (existingSugg.rows.length === 0 || diffMs > oneDayMs) {
           // Fetch member interests for generation
           const membersWithInterests = await query(
             `SELECT u.interests FROM group_participants gp

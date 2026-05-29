@@ -4,6 +4,12 @@ const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm } = require('../matching');
 
+
+const reporterUserSchema = z.object({
+  reportedUserID: z.string().uuid(),
+  reason: z.string().min(1),
+});
+
 const updateProfileSchema = z.object({
   astrology_sign_id: z.any().optional(),
   bio: z.string().optional(),
@@ -163,6 +169,23 @@ async function userRoutes(app) {
       });
     } catch (err) {
       console.error('Discover error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  app.post('/report_user', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const reporterId = getUserId(request);
+      const body = reporterUserSchema.parse(request.body);
+
+      await query(
+        `INSERT INTO reported_user(reporter_id, reported_user_id, reason) VALUES($1,$2,$3)`,
+        [reporterId, body.reportedUserID, body.reason]
+      );
+
+      return reply.send({ report_status: true });
+    } catch (err) {
+      console.error('Report user error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });

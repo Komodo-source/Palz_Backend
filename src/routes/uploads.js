@@ -31,7 +31,7 @@ async function compressImage(buffer) {
     const compressed = await sharp(buffer)
       .rotate()
       .resize({ width: 1200, withoutEnlargement: true })
-      .jpeg({ quality: 85, progressive: true })
+      .jpeg({ quality: 90, progressive: true })
       .toBuffer();
     return { buffer: compressed, contentType: 'image/jpeg' };
   } catch {
