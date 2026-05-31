@@ -205,6 +205,8 @@ async function messageRoutes(app) {
   app.get('/conversations', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
+      const limit = Math.min(parseInt(request.query.limit, 10) || 50, 100);
+      const offset = Math.max(parseInt(request.query.offset, 10) || 0, 0);
 
       const result = await query(
         `SELECT
@@ -241,11 +243,12 @@ async function messageRoutes(app) {
            LIMIT 1
          ) last_msg ON true
          WHERE pc.user_initiator = $1 OR pc.user_receiver = $1
-         ORDER BY last_msg.created_at DESC NULLS LAST`,
-        [userId]
+         ORDER BY last_msg.created_at DESC NULLS LAST
+         LIMIT $2 OFFSET $3`,
+        [userId, limit, offset]
       );
 
-      return reply.send({ conversations: result.rows });
+      return reply.send({ conversations: result.rows, has_more: result.rows.length === limit });
     } catch (err) {
       console.error('Conversations error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });

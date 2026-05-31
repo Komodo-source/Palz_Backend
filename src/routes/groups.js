@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { query } = require('../db');
+const { query, withTransaction } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm, parseInterests, get_weather } = require('../matching');
@@ -212,7 +212,10 @@ async function groupRoutes(app) {
 
       // Find active weekly group the user is part of
       const result = await query(
-        `SELECT wg.*, dg.title, dg.description, dg.photo, dg.category
+        `SELECT wg.id, wg.group_id, wg.week_start, wg.week_end,
+                wg.common_interest, wg.rendezvous_location, wg.rendezvous_time,
+                wg.is_active, wg.created_at,
+                dg.title, dg.description, dg.photo, dg.category
          FROM weekly_groups wg
          JOIN discussion_groups dg ON dg.id = wg.group_id
          JOIN group_participants gp ON gp.group_id = dg.id
@@ -443,44 +446,40 @@ async function groupRoutes(app) {
 
       const groupTitle = `Groupe ${commonInterest}`;
 
-      const dgResult = await query(
-        `INSERT INTO discussion_groups (owner_id, title, description, participant_limit, is_private, category)
-         VALUES ($1, $2, $3, $4, false, 'weekly')
-         RETURNING id`,
-        [userId, groupTitle, `Groupe hebdomadaire: ${commonInterest}`, GROUP_SIZE]
-      );
-
-      const discussionGroupId = dgResult.rows[0].id;
-
-      // Create weekly_group
-      const wgResult = await query(
-        `INSERT INTO weekly_groups (group_id, week_start, week_end, common_interest, is_active)
-         VALUES ($1, $2, $3, $4, true)
-         RETURNING id`,
-        [discussionGroupId, weekStart.toISOString(), weekEnd.toISOString(), commonInterest]
-      );
-
-      const weeklyGroupId = wgResult.rows[0].id;
-
-      // Add all members to group_participants
-      for (const member of groupMembers) {
-        await query(
-          `INSERT INTO group_participants (group_id, user_id)
-           VALUES ($1, $2)
-           ON CONFLICT (group_id, user_id) DO NOTHING`,
-          [discussionGroupId, member.id]
+      const { discussionGroupId, weeklyGroupId, membersResult } = await withTransaction(async (client) => {
+        const dgResult = await client.query(
+          `INSERT INTO discussion_groups (owner_id, title, description, participant_limit, is_private, category)
+           VALUES ($1, $2, $3, $4, false, 'weekly')
+           RETURNING id`,
+          [userId, groupTitle, `Groupe hebdomadaire: ${commonInterest}`, GROUP_SIZE]
         );
-      }
+        const dgId = dgResult.rows[0].id;
 
-      // Get full member details
-      const membersResult = await query(
-        `SELECT u.id, u.full_name,
-                u.user_name, u.profile_image, u.location
-         FROM group_participants gp
-         JOIN users u ON u.id = gp.user_id
-         WHERE gp.group_id = $1`,
-        [discussionGroupId]
-      );
+        const wgResult = await client.query(
+          `INSERT INTO weekly_groups (group_id, week_start, week_end, common_interest, is_active)
+           VALUES ($1, $2, $3, $4, true)
+           RETURNING id`,
+          [dgId, weekStart.toISOString(), weekEnd.toISOString(), commonInterest]
+        );
+        const wgId = wgResult.rows[0].id;
+
+        await client.query(
+          `INSERT INTO group_participants (group_id, user_id)
+           SELECT $1, unnest($2::uuid[])
+           ON CONFLICT (group_id, user_id) DO NOTHING`,
+          [dgId, groupMembers.map((m) => m.id)]
+        );
+
+        const members = await client.query(
+          `SELECT u.id, u.full_name, u.user_name, u.profile_image, u.location
+           FROM group_participants gp
+           JOIN users u ON u.id = gp.user_id
+           WHERE gp.group_id = $1`,
+          [dgId]
+        );
+
+        return { discussionGroupId: dgId, weeklyGroupId: wgId, membersResult: members };
+      });
 
       return reply.status(201).send({
         group: {
@@ -748,17 +747,22 @@ async function groupRoutes(app) {
         return reply.status(403).send({ error: 'You are not a member of this group' });
       }
 
-      // Cannot vote on yourself
-      const othersOnly = votes.filter((v) => v.member_id !== userId);
+      const validVotes = votes.filter((v) => v.member_id !== userId && typeof v.keep === 'boolean');
 
-      for (const v of othersOnly) {
-        if (typeof v.keep !== 'boolean') continue;
+      if (validVotes.length > 0) {
+        const placeholders = validVotes.map((_, i) => {
+          const b = 3 + i * 2;
+          return `($1, $2, $${b}, $${b + 1})`;
+        }).join(', ');
+        const values = [weekly_group_id, userId];
+        for (const v of validVotes) values.push(v.member_id, v.keep);
+
         await query(
           `INSERT INTO member_votes (weekly_group_id, voter_id, member_id, keep)
-           VALUES ($1, $2, $3, $4)
+           VALUES ${placeholders}
            ON CONFLICT (weekly_group_id, voter_id, member_id)
-           DO UPDATE SET keep = $4`,
-          [weekly_group_id, userId, v.member_id, v.keep]
+           DO UPDATE SET keep = EXCLUDED.keep`,
+          values
         );
       }
 
@@ -916,25 +920,38 @@ async function groupRoutes(app) {
         );
       }
 
-      for (const mr of (Array.isArray(member_ratings) ? member_ratings : [])) {
-        if (!mr.member_id || mr.member_id === userId) continue;
-        await query(
-          `INSERT INTO member_personality_ratings
-             (weekly_group_id, reviewer_id, member_id,
-              spontaneous_vs_planner, sporty_vs_chill, party_vs_coffee, deep_vs_casual, group_role)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (weekly_group_id, reviewer_id, member_id)
-           DO UPDATE SET
-             spontaneous_vs_planner = $4, sporty_vs_chill = $5,
-             party_vs_coffee = $6, deep_vs_casual = $7, group_role = $8`,
-          [
-            weekly_group_id, userId, mr.member_id,
+      const validRatings = (Array.isArray(member_ratings) ? member_ratings : [])
+        .filter((mr) => mr.member_id && mr.member_id !== userId);
+
+      if (validRatings.length > 0) {
+        const placeholders = validRatings.map((_, i) => {
+          const b = 3 + i * 6;
+          return `($1, $2, $${b}, $${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5})`;
+        }).join(', ');
+        const values = [weekly_group_id, userId];
+        for (const mr of validRatings) {
+          values.push(
+            mr.member_id,
             mr.spontaneous_vs_planner ?? null,
             mr.sporty_vs_chill ?? null,
             mr.party_vs_coffee ?? null,
             mr.deep_vs_casual ?? null,
-            mr.group_role ?? null,
-          ]
+            mr.group_role ?? null
+          );
+        }
+        await query(
+          `INSERT INTO member_personality_ratings
+             (weekly_group_id, reviewer_id, member_id,
+              spontaneous_vs_planner, sporty_vs_chill, party_vs_coffee, deep_vs_casual, group_role)
+           VALUES ${placeholders}
+           ON CONFLICT (weekly_group_id, reviewer_id, member_id)
+           DO UPDATE SET
+             spontaneous_vs_planner = EXCLUDED.spontaneous_vs_planner,
+             sporty_vs_chill = EXCLUDED.sporty_vs_chill,
+             party_vs_coffee = EXCLUDED.party_vs_coffee,
+             deep_vs_casual = EXCLUDED.deep_vs_casual,
+             group_role = EXCLUDED.group_role`,
+          values
         );
       }
 
@@ -953,19 +970,37 @@ async function groupRoutes(app) {
       if (!weekly_group_id || !Array.isArray(ratings)) {
         return reply.status(400).send({ error: 'weekly_group_id and ratings[] are required' });
       }
-      for (const r of ratings) {
-        if (!r.rated_user_id || r.rated_user_id === userId) continue;
-        const wa = parseInt(r.want_again, 10);
-        const co = parseInt(r.comfort, 10);
-        const ic = parseInt(r.in_common, 10);
-        if (wa < 1 || wa > 5 || co < 1 || co > 5 || ic < 1 || ic > 5) continue;
+      const validRatings = ratings
+        .map((r) => ({
+          rated_user_id: r.rated_user_id,
+          want_again: parseInt(r.want_again, 10),
+          comfort: parseInt(r.comfort, 10),
+          in_common: parseInt(r.in_common, 10),
+        }))
+        .filter((r) =>
+          r.rated_user_id && r.rated_user_id !== userId &&
+          r.want_again >= 1 && r.want_again <= 5 &&
+          r.comfort >= 1 && r.comfort <= 5 &&
+          r.in_common >= 1 && r.in_common <= 5
+        );
+
+      if (validRatings.length > 0) {
+        const placeholders = validRatings.map((_, i) => {
+          const b = 3 + i * 4;
+          return `($1, $2, $${b}, $${b + 1}, $${b + 2}, $${b + 3})`;
+        }).join(', ');
+        const values = [weekly_group_id, userId];
+        for (const r of validRatings) values.push(r.rated_user_id, r.want_again, r.comfort, r.in_common);
+
         await query(
           `INSERT INTO member_interaction_ratings
              (weekly_group_id, rater_id, rated_user_id, want_again, comfort, in_common)
-           VALUES ($1, $2, $3, $4, $5, $6)
+           VALUES ${placeholders}
            ON CONFLICT (weekly_group_id, rater_id, rated_user_id)
-           DO UPDATE SET want_again = $4, comfort = $5, in_common = $6`,
-          [weekly_group_id, userId, r.rated_user_id, wa, co, ic]
+           DO UPDATE SET want_again = EXCLUDED.want_again,
+                         comfort = EXCLUDED.comfort,
+                         in_common = EXCLUDED.in_common`,
+          values
         );
       }
       return reply.send({ submitted: true });

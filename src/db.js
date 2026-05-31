@@ -85,4 +85,19 @@ async function getClient() {
   return client;
 }
 
-module.exports = { query, getClient, get pool() { return _pool; } };
+async function withTransaction(fn) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { query, getClient, withTransaction, get pool() { return _pool; } };

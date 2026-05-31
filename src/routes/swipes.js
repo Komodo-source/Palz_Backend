@@ -89,6 +89,8 @@ async function swipeRoutes(app) {
   app.get('/matches', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
+      const limit = Math.min(parseInt(request.query.limit, 10) || 50, 200);
+      const offset = Math.max(parseInt(request.query.offset, 10) || 0, 0);
 
       const result = await query(
         `SELECT
@@ -104,11 +106,12 @@ async function swipeRoutes(app) {
              SELECT 1 FROM user_likes ul2
              WHERE ul2.liker_id = $1 AND ul2.liked_id = ul.liker_id
            )
-         ORDER BY ul.created_at DESC`,
-        [userId]
+         ORDER BY ul.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [userId, limit, offset]
       );
 
-      return reply.send({ matches: result.rows });
+      return reply.send({ matches: result.rows, has_more: result.rows.length === limit });
     } catch (err) {
       console.error('Matches error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
@@ -118,6 +121,8 @@ async function swipeRoutes(app) {
   app.get('/likes', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
+      const limit = Math.min(parseInt(request.query.limit, 10) || 50, 200);
+      const offset = Math.max(parseInt(request.query.offset, 10) || 0, 0);
 
       const result = await query(
         `SELECT u.id, u.full_name, u.user_name, u.profile_image, u.bio,
@@ -129,11 +134,12 @@ async function swipeRoutes(app) {
              SELECT 1 FROM user_likes ul2
              WHERE ul2.liker_id = $1 AND ul2.liked_id = ul.liker_id
            )
-         ORDER BY ul.created_at DESC`,
-        [userId]
+         ORDER BY ul.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [userId, limit, offset]
       );
 
-      return reply.send({ likes: result.rows });
+      return reply.send({ likes: result.rows, has_more: result.rows.length === limit });
     } catch (err) {
       console.error('Likes error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
