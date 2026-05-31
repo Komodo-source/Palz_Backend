@@ -321,13 +321,15 @@ async function userRoutes(app) {
         await query('DELETE FROM user_sports WHERE user_id = $1', [userId]);
         if (sports.length > 0) {
           const sportsRows = await query(
-            `SELECT id, title FROM sports WHERE title = ANY($1)`,
+            `SELECT id FROM sports WHERE title = ANY($1)`,
             [sports]
           );
-          for (const row of sportsRows.rows) {
+          if (sportsRows.rows.length > 0) {
             await query(
-              'INSERT INTO user_sports (user_id, sport_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-              [userId, row.id]
+              `INSERT INTO user_sports (user_id, sport_id)
+               SELECT $1, unnest($2::uuid[])
+               ON CONFLICT DO NOTHING`,
+              [userId, sportsRows.rows.map((r) => r.id)]
             );
           }
         }
@@ -338,13 +340,15 @@ async function userRoutes(app) {
         await query('DELETE FROM user_hobbies WHERE user_id = $1', [userId]);
         if (hobbies.length > 0) {
           const hobbiesRows = await query(
-            `SELECT id, title FROM hobbies WHERE title = ANY($1)`,
+            `SELECT id FROM hobbies WHERE title = ANY($1)`,
             [hobbies]
           );
-          for (const row of hobbiesRows.rows) {
+          if (hobbiesRows.rows.length > 0) {
             await query(
-              'INSERT INTO user_hobbies (user_id, hobby_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-              [userId, row.id]
+              `INSERT INTO user_hobbies (user_id, hobby_id)
+               SELECT $1, unnest($2::uuid[])
+               ON CONFLICT DO NOTHING`,
+              [userId, hobbiesRows.rows.map((r) => r.id)]
             );
           }
         }

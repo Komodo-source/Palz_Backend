@@ -213,6 +213,9 @@ async function wallRoutes(app) {
     try {
       const { postId } = request.params;
 
+      const limit = Math.min(parseInt(request.query.limit, 10) || 100, 200);
+      const offset = Math.max(parseInt(request.query.offset, 10) || 0, 0);
+
       const result = await query(
         `SELECT wm.id, wm.sender_id, wm.content, wm.created_at,
                 u.full_name AS sender_name, u.user_name AS sender_username,
@@ -220,11 +223,12 @@ async function wallRoutes(app) {
          FROM wall_messages wm
          JOIN users u ON u.id = wm.sender_id
          WHERE wm.wall_post_id = $1
-         ORDER BY wm.created_at ASC`,
-        [postId]
+         ORDER BY wm.created_at ASC
+         LIMIT $2 OFFSET $3`,
+        [postId, limit, offset]
       );
 
-      return reply.send({ messages: result.rows });
+      return reply.send({ messages: result.rows, has_more: result.rows.length === limit });
     } catch (err) {
       console.error('Wall post messages error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
