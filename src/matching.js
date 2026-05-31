@@ -92,7 +92,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
  * Score a candidate against the current user.
  * Returns a number 0..1 where higher = better match.
  */
-function scoreCandidate(user, candidate) {
+function scoreCandidate(user, candidate, affinityBonus = 0) {
   const userInterests = parseInterests(user.interests);
   const candInterests = parseInterests(candidate.interests);
 
@@ -123,13 +123,14 @@ function scoreCandidate(user, candidate) {
   // 5. astrology sign
   const zodiacScore = checkZodiacCompatibility(user.astrology_title, candidate.astrology_title) ? 1 : 0;
 
-  return (
+  const base = (
     personalityScore * 0.50 +
     hobbiesScore * 0.20 +
     sportsScore * 0.20 +
     distanceScore * 0.10 +
     zodiacScore * 0.05
   );
+  return Math.min(1, Math.max(0, base + affinityBonus));
 }
 
 module.exports = {
