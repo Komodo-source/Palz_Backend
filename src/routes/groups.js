@@ -3,6 +3,7 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm, parseInterests, get_weather } = require('../matching');
+const {ACTIVITY_BASED_LABELS} = require("../activities");
 
 const createGroupMessageSchema = z.object({
   weekly_group_id: z.string().uuid(),
@@ -13,7 +14,7 @@ const createGroupMessageSchema = z.object({
 
 const GROUP_SIZE = 5;
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const ACTIVITY_TRIGGER_HOURS = 4; // suggest activities after this many hours
+const ACTIVITY_TRIGGER_HOURS = 4;
 
 const SPORT_ACTIVITIES = {
   yoga:        { title: 'Cours de yoga ensemble',    icon: 'body-outline',          color: '#10B981', humidity: [0, 80],  temperature: [15, 35] },
@@ -33,7 +34,6 @@ const SPORT_ACTIVITIES = {
 const HOBBY_ACTIVITIES = {
   cuisine:      { title: 'Atelier cuisine maison',   icon: 'restaurant-outline',    color: '#10B981', humidity: [0, 80],  temperature: [10, 35] },
   cinéma:       { title: 'Soirée ciné',              icon: 'film-outline',          color: '#F59E0B', humidity: [0, 100], temperature: [-10, 40] },
-  cinema:       { title: 'Soirée ciné',              icon: 'film-outline',          color: '#F59E0B', humidity: [0, 100], temperature: [-10, 40] },
   musique:      { title: 'Concert ou live music',    icon: 'musical-notes-outline', color: '#8B5CF6', humidity: [0, 80],  temperature: [10, 35] },
   art:          { title: 'Atelier créatif',          icon: 'color-palette-outline', color: '#EC4899', humidity: [0, 80],  temperature: [15, 35] },
   peinture:     { title: 'Atelier peinture',         icon: 'color-palette-outline', color: '#EC4899', humidity: [0, 80],  temperature: [15, 35] },
@@ -58,12 +58,22 @@ const SOCIAL_DEFAULTS = [
   { title: 'Mini-golf',            icon: 'golf-outline',         color: '#22C55E', description: 'Casual et fun',               humidity: [0, 60],  temperature: [15, 30]  },
 ];
 
-function generateActivitySuggestions(members) {
+async function generateActivitySuggestions(members) {
   const sportFreq = {};
   const hobbyFreq = {};
   const personalityTotals = { social_energy: 0, planning_style: 0, conversation_depth: 0 };
   let personalityCount = 0;
-  const { humidity, teemperature } = get_weather("");
+
+  const weatherData = await get_weather(""); // { humidity, temperature } or null
+
+  // Range check helper: activity.humidity/temperature are [min, max] pairs
+  const okForWeather = (activity) => {
+    if (!weatherData) return true;
+    const { humidity, temperature } = weatherData;
+    const [humMin, humMax] = activity.humidity;
+    const [tempMin, tempMax] = activity.temperature;
+    return humidity >= humMin && humidity <= humMax && temperature >= tempMin && temperature <= tempMax;
+  };
 
   for (const m of members) {
     const interests = parseInterests(m.interests);
@@ -94,59 +104,56 @@ function generateActivitySuggestions(members) {
   const suggestions = [];
   const usedTitles = new Set();
 
-  //génère un intérêt qui a au moins 2 user qui aime ça
+  // Sports shared by ≥2 members, filtered by weather
   const topSports = Object.entries(sportFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
   for (const [sport, count] of topSports) {
     if (suggestions.length >= 2) break;
-    let telokate;
-    if(humidity !== null){
-      if (SPORT_ACTIVITIES[sport].humidity.includes(humidity) && SPORT_ACTIVITIES[sport].temperature.includes(temperature)){
-        template = SPORT_ACTIVITIES[sport];
-      }
-    }else{
-      template = SPORT_ACTIVITIES[sport];
-    }
-    if (template && !usedTitles.has(template.title)) {
+    const template = SPORT_ACTIVITIES[sport];
+    if (!template) continue;
+    if (!okForWeather(template)) continue;
+    if (!usedTitles.has(template.title)) {
       suggestions.push({ ...template, description: `${count} membres aiment ça`, tag: 'sport' });
       usedTitles.add(template.title);
     }
   }
 
+  // Hobbies shared by ≥2 members, filtered by weather
   const topHobbies = Object.entries(hobbyFreq).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
   for (const [hobby, count] of topHobbies) {
     if (suggestions.length >= 3) break;
-    let template
-
-    if(HOBBY_ACTIVITIES[hobby].humidity.includes(humidity) && HOBBY_ACTIVITIES[hobby].temperature.includes(temperature)){
-      template = HOBBY_ACTIVITIES[hobby]
-    }else{
-      template = HOBBY_ACTIVITIES[hobby];
-    }
-    if (template && !usedTitles.has(template.title)) {
+    const template = HOBBY_ACTIVITIES[hobby];
+    if (!template) continue;
+    if (!okForWeather(template)) continue;
+    if (!usedTitles.has(template.title)) {
       suggestions.push({ ...template, description: `${count} membres adorent ça`, tag: 'hobby' });
       usedTitles.add(template.title);
     }
   }
 
-  // If we still need suggestions, use personality-driven defaults
-  // Shuffle defaults then pick ones suited to the group's personality
+  // Fill remaining slots with personality-driven social defaults
   const shuffled = [...SOCIAL_DEFAULTS].sort(() => Math.random() - 0.5);
-  // Bias toward party/social if social_energy high
-  if (avgPersonality.social_energy >= 6) {
-    const partyFirst = shuffled.sort((a, b) => {
-      const partyTerms = ['cocktails', 'karaoké', 'soirée'];
-      const aParty = partyTerms.some(t => a.title.toLowerCase().includes(t)) ? -1 : 1;
-      const bParty = partyTerms.some(t => b.title.toLowerCase().includes(t)) ? -1 : 1;
-      return aParty - bParty;
-    });
-    for (const def of partyFirst) {
-      if (suggestions.length >= 4) break;
-      if (!usedTitles.has(def.title)) { suggestions.push({ ...def, tag: 'social' }); usedTitles.add(def.title); }
+  const partyTerms = ['cocktails', 'karaoké', 'soirée'];
+  const ordered = avgPersonality.social_energy >= 6
+    ? shuffled.sort((a, b) => {
+        const aParty = partyTerms.some((t) => a.title.toLowerCase().includes(t)) ? -1 : 1;
+        const bParty = partyTerms.some((t) => b.title.toLowerCase().includes(t)) ? -1 : 1;
+        return aParty - bParty;
+      })
+    : shuffled;
+
+  for (const def of ordered) {
+    if (suggestions.length >= 4) break;
+    if (okForWeather(def) && !usedTitles.has(def.title)) {
+      suggestions.push({ ...def, tag: 'social' });
+      usedTitles.add(def.title);
     }
-  } else {
-    for (const def of shuffled) {
-      if (suggestions.length >= 4) break;
-      if (!usedTitles.has(def.title)) { suggestions.push({ ...def, tag: 'social' }); usedTitles.add(def.title); }
+  }
+  // If weather filtered too aggressively, fill without weather constraint
+  for (const def of ordered) {
+    if (suggestions.length >= 4) break;
+    if (!usedTitles.has(def.title)) {
+      suggestions.push({ ...def, tag: 'social' });
+      usedTitles.add(def.title);
     }
   }
 
@@ -256,20 +263,16 @@ async function groupRoutes(app) {
       const hoursSinceStart = (Date.now() - new Date(group.week_start).getTime()) / 3600000;
       if (hoursSinceStart >= ACTIVITY_TRIGGER_HOURS) {
         const existingSugg = await query(
-          'SELECT suggestions FROM group_activity_suggestions WHERE weekly_group_id = $1',
+          'SELECT suggestions, generated_at FROM group_activity_suggestions WHERE weekly_group_id = $1',
           [group.id]
         );
 
-        let date_creation_suggestion = existingSugg.rows[0].generated_at;
-        // "2026-05-25 12:14:53.986381+00"
-
-        const createdAt = new Date(date_creation_suggestion);
-        const today = new Date();
-
-        const diffMs = today - createdAt;
         const oneDayMs = 24 * 60 * 60 * 1000;
+        const hasExisting = existingSugg.rows.length > 0;
+        const generatedAt = hasExisting ? new Date(existingSugg.rows[0].generated_at) : null;
+        const diffMs = generatedAt ? Date.now() - generatedAt.getTime() : Infinity;
 
-        if (existingSugg.rows.length === 0 || diffMs > oneDayMs) {
+        if (!hasExisting || diffMs > oneDayMs) {
           // Fetch member interests for generation
           const membersWithInterests = await query(
             `SELECT u.interests FROM group_participants gp
@@ -277,9 +280,11 @@ async function groupRoutes(app) {
              WHERE gp.group_id = $1`,
             [group.group_id]
           );
-          const generated = generateActivitySuggestions(membersWithInterests.rows);
+          const generated = await generateActivitySuggestions(membersWithInterests.rows);
           await query(
-            'INSERT INTO group_activity_suggestions (weekly_group_id, suggestions) VALUES ($1, $2)',
+            `INSERT INTO group_activity_suggestions (weekly_group_id, suggestions)
+             VALUES ($1, $2)
+             ON CONFLICT (weekly_group_id) DO UPDATE SET suggestions = $2, generated_at = NOW()`,
             [group.id, JSON.stringify(generated)]
           );
           activitySuggestions = generated;
@@ -388,10 +393,24 @@ async function groupRoutes(app) {
 
       const candidates = candidatesResult.rows;
 
-      //score
+      // Fetch affinity bonuses from past interaction ratings
+      const affinityResult = await query(
+        `SELECT rated_user_id,
+                AVG((want_again + comfort + in_common)::float / 3) AS avg_score
+         FROM member_interaction_ratings
+         WHERE rater_id = $1
+         GROUP BY rated_user_id`,
+        [userId]
+      );
+      // avg_score 1–5, centred at 3 → bonus range –0.15 to +0.15
+      const affinityMap = {};
+      for (const row of affinityResult.rows) {
+        affinityMap[row.rated_user_id] = ((parseFloat(row.avg_score) - 3) / 2) * 0.15;
+      }
+
       const scored = candidates.map((c) => ({
         candidate: c,
-        score: scoreCandidate(me, c),
+        score: scoreCandidate(me, c, affinityMap[c.id] ?? 0),
       }));
 
       //filtre de proximité -- 30dm
@@ -922,6 +941,36 @@ async function groupRoutes(app) {
       return reply.send({ submitted: true });
     } catch (err) {
       console.error('Dissolution feedback error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── POST interaction ratings (3 questions × member, scale 1–5) ──
+  app.post('/interaction-ratings', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weekly_group_id, ratings } = request.body;
+      if (!weekly_group_id || !Array.isArray(ratings)) {
+        return reply.status(400).send({ error: 'weekly_group_id and ratings[] are required' });
+      }
+      for (const r of ratings) {
+        if (!r.rated_user_id || r.rated_user_id === userId) continue;
+        const wa = parseInt(r.want_again, 10);
+        const co = parseInt(r.comfort, 10);
+        const ic = parseInt(r.in_common, 10);
+        if (wa < 1 || wa > 5 || co < 1 || co > 5 || ic < 1 || ic > 5) continue;
+        await query(
+          `INSERT INTO member_interaction_ratings
+             (weekly_group_id, rater_id, rated_user_id, want_again, comfort, in_common)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (weekly_group_id, rater_id, rated_user_id)
+           DO UPDATE SET want_again = $4, comfort = $5, in_common = $6`,
+          [weekly_group_id, userId, r.rated_user_id, wa, co, ic]
+        );
+      }
+      return reply.send({ submitted: true });
+    } catch (err) {
+      console.error('Interaction ratings error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });

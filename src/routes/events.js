@@ -2,7 +2,7 @@ const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
-
+const {ACTIVITY_BASED_LABELS} = require("../activities");
 const VALID_CATEGORIES = ['bar', 'bowling', 'cinema', 'restaurant', 'sport', 'cafe', 'plage', 'parc', 'autre'];
 
 const createEventSchema = z.object({
@@ -16,7 +16,6 @@ const createEventSchema = z.object({
   starts_at: z.string().datetime(),
 });
 
-// An event is "active" while starts_at + 72h > NOW()
 const ACTIVE_FILTER = `e.starts_at + INTERVAL '72 hours' > NOW()`;
 
 async function eventRoutes(app) {
@@ -25,7 +24,7 @@ async function eventRoutes(app) {
   app.get('/', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      const { filter, category } = request.query; 
+      const { filter, category } = request.query;
 
       const params = [userId];
       let extraWhere = '';
@@ -136,15 +135,26 @@ async function eventRoutes(app) {
         : 'hiver';
 
       const interestsRes = await query(
-        `SELECT h.name AS name FROM user_hobbies uh
-         JOIN hobbies h ON h.id = uh.hobby_id WHERE uh.user_id = $1
-         UNION ALL
-         SELECT s.name AS name FROM user_sports us
-         JOIN sports s ON s.id = us.sport_id WHERE us.user_id = $1`,
+        `SELECT
+           u.labels AS labels,
+           ARRAY_AGG(DISTINCT s.title) FILTER (WHERE s.title IS NOT NULL) AS sports,
+           ARRAY_AGG(DISTINCT h.title) FILTER (WHERE h.title IS NOT NULL) AS hobbies
+         FROM users u
+         LEFT JOIN user_sports us ON us.user_id = u.id
+         LEFT JOIN sports s ON us.sport_id = s.id
+         LEFT JOIN user_hobbies uh ON uh.user_id = u.id
+         LEFT JOIN hobbies h ON uh.hobby_id = h.id
+         WHERE u.id = $1
+         GROUP BY u.labels`,
         [userId]
       );
 
-      const interests = interestsRes.rows.map((r) => r.name.toLowerCase());
+      const row = interestsRes.rows[0] || {};
+      const rawLabels = row.labels && typeof row.labels === 'object' ? row.labels : {};
+      const vibeLabels = Array.isArray(rawLabels.vibe) ? rawLabels.vibe : [];
+      const dispoLabels = Array.isArray(rawLabels.dispo) ? rawLabels.dispo : [];
+      const allLabelNames = [...vibeLabels, ...dispoLabels].map((l) => l.toLowerCase());
+      const interests = [...(row.sports || []), ...(row.hobbies || [])].map((i) => i.toLowerCase());
 
       const INTEREST_CATEGORY = {
         football: 'sport', basket: 'sport', tennis: 'sport', yoga: 'sport',
@@ -153,7 +163,6 @@ async function eventRoutes(app) {
         cinéma: 'cinema', films: 'cinema',
         cuisine: 'restaurant', gastronomie: 'restaurant',
         soirées: 'bar', musique: 'bar',
-        plage: 'plage', surf: 'plage',
       };
 
       const SEASON_BASE = {
@@ -185,11 +194,30 @@ async function eventRoutes(app) {
         plage: 'Journée plage', parc: 'Sortie au parc', autre: 'Activité surprise',
       };
 
+      const LABEL_CATEGORY = {
+        sportive: 'sport', foodie: 'restaurant', geek: 'cinema',
+        homebody: 'cinema', voyageuse: 'parc', bookworm: 'cafe',
+        créative: 'cafe', spontanée: 'bar', ambitieuse: 'sport',
+        soirées: 'bar', brunchs: 'restaurant', apéros: 'bar',
+        cinéma: 'cinema', randos: 'parc', yoga: 'sport',
+        'musées/expos': 'cinema', concerts: 'bar',
+      };
+
       const suggestions = [...(SEASON_BASE[season] || SEASON_BASE.hiver)];
+
+      // Interest-based suggestions
       const interestCats = [...new Set(interests.map((i) => INTEREST_CATEGORY[i]).filter(Boolean))];
       interestCats.slice(0, 2).forEach((cat) => {
         if (!suggestions.find((s) => s.category === cat)) {
           suggestions.push({ category: cat, title: CAT_TITLE[cat] || 'Activité', reason: 'Selon tes intérêts ✨' });
+        }
+      });
+
+      // Label-based suggestions
+      const labelCats = [...new Set(allLabelNames.map((l) => LABEL_CATEGORY[l]).filter(Boolean))];
+      labelCats.slice(0, 2).forEach((cat) => {
+        if (!suggestions.find((s) => s.category === cat)) {
+          suggestions.push({ category: cat, title: CAT_TITLE[cat] || 'Activité', reason: 'Selon ton vibe ✨' });
         }
       });
 
