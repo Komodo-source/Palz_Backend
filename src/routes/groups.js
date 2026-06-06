@@ -4,6 +4,7 @@ const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm, parseInterests, get_weather } = require('../matching');
 const {ACTIVITY_BASED_LABELS} = require("../activities");
+const { sendPush, getTokensForUsers } = require('../services/push');
 
 const createGroupMessageSchema = z.object({
   weekly_group_id: z.string().uuid(),
@@ -481,6 +482,14 @@ async function groupRoutes(app) {
         return { discussionGroupId: dgId, weeklyGroupId: wgId, membersResult: members };
       });
 
+      // Notify the other members (not the initiator) that they've been added
+      const otherMemberIds = membersResult.rows.map((m) => m.id).filter((id) => id !== userId);
+      if (otherMemberIds.length > 0) {
+        getTokensForUsers(otherMemberIds, query).then((tokens) => {
+          sendPush(tokens, '🎉 Ton groupe de la semaine est prêt !', `Tu as été mise en groupe autour de "${commonInterest}". Va dire bonjour !`, { type: 'group_formed' });
+        }).catch(() => {});
+      }
+
       return reply.status(201).send({
         group: {
           id: weeklyGroupId,
@@ -715,6 +724,20 @@ async function groupRoutes(app) {
         [body.weekly_group_id, userId, body.content || '', body.message_type || 'text', body.media_url || null]
       );
 
+      // Notify other group members (fire-and-forget)
+      Promise.all([
+        query('SELECT full_name FROM users WHERE id = $1', [userId]),
+        query(`SELECT dg.title FROM weekly_groups wg JOIN discussion_groups dg ON dg.id = wg.group_id WHERE wg.id = $1`, [body.weekly_group_id]),
+        query(`SELECT gp.user_id FROM weekly_groups wg JOIN group_participants gp ON gp.group_id = wg.group_id WHERE wg.id = $1 AND gp.user_id != $2`, [body.weekly_group_id, userId]),
+      ]).then(async ([senderRes, groupRes, membersRes]) => {
+        const senderName = senderRes.rows[0]?.full_name || 'Quelqu\'un';
+        const groupTitle = groupRes.rows[0]?.title || 'Groupe';
+        const memberIds = membersRes.rows.map((r) => r.user_id);
+        const tokens = await getTokensForUsers(memberIds, query);
+        const preview = body.content?.trim() || '📷';
+        sendPush(tokens, groupTitle, `${senderName}: ${preview}`, { type: 'group_message', weekly_group_id: body.weekly_group_id });
+      }).catch(() => {});
+
       return reply.status(201).send({ message: result.rows[0] });
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -846,6 +869,21 @@ async function groupRoutes(app) {
          WHERE id = $1`,
         [weekly_group_id, location, time || null]
       );
+
+      // Notify all group members of the proposed rendezvous (fire-and-forget)
+      Promise.all([
+        query(`SELECT dg.title FROM weekly_groups wg JOIN discussion_groups dg ON dg.id = wg.group_id WHERE wg.id = $1`, [weekly_group_id]),
+        query(`SELECT gp.user_id FROM weekly_groups wg JOIN group_participants gp ON gp.group_id = wg.group_id WHERE wg.id = $1`, [weekly_group_id]),
+      ]).then(async ([groupRes, membersRes]) => {
+        const groupTitle = groupRes.rows[0]?.title || 'Votre groupe';
+        const memberIds = membersRes.rows.map((r) => r.user_id);
+        const tokens = await getTokensForUsers(memberIds, query);
+        const timeLabel = time
+          ? new Date(time).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+          : null;
+        const bodyMsg = timeLabel ? `📍 ${location} à ${timeLabel}` : `📍 ${location}`;
+        sendPush(tokens, `${groupTitle} — Rendez-vous proposé !`, bodyMsg, { type: 'rendezvous', weekly_group_id });
+      }).catch(() => {});
 
       return reply.send({ updated: true });
     } catch (err) {

@@ -389,6 +389,21 @@ async function userRoutes(app) {
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
+  // ── PUT /push-token — register Expo push token ──
+  app.put('/push-token', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { token } = request.body || {};
+      if (!token || typeof token !== 'string') {
+        return reply.status(400).send({ error: 'token is required' });
+      }
+      await query('UPDATE users SET expo_push_token = $1 WHERE id = $2', [token, userId]);
+      return reply.send({ updated: true });
+    } catch (err) {
+      console.error('Push token error:', err);
+      return reply.status(500).send({ error: 'Internal server error' });
+    }
+  });
 }
 
 module.exports = { userRoutes };

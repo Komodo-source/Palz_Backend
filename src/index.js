@@ -60,8 +60,22 @@ async function ensureRevokedTokensTable() {
   `);
 }
 
+async function ensureExtraTables() {
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS expo_push_token TEXT`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS event_reminder_log (
+      event_id      UUID        NOT NULL,
+      user_id       UUID        NOT NULL,
+      reminder_type VARCHAR(4)  NOT NULL,
+      sent_at       TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (event_id, user_id, reminder_type)
+    )
+  `);
+}
+
 async function start() {
   await ensureRevokedTokensTable();
+  await ensureExtraTables();
 
   // ── CORS — whitelist explicite ──
   await app.register(cors, {

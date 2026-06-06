@@ -2,6 +2,7 @@ const { z } = require('zod');
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
+const { sendPush, getTokensForUsers } = require('../services/push');
 
 const sendMessageSchema = z.object({
   conversation_id: z.string().uuid(),
@@ -456,6 +457,16 @@ async function messageRoutes(app) {
         'UPDATE personal_conversations SET updated_at = NOW() WHERE id = $1',
         [body.conversation_id]
       );
+
+      // Notify recipient (fire-and-forget)
+      const conv = convCheck.rows[0];
+      const recipientId = conv.user_initiator === userId ? conv.user_receiver : conv.user_initiator;
+      query('SELECT full_name FROM users WHERE id = $1', [userId]).then(async (r) => {
+        const name = r.rows[0]?.full_name || 'Quelqu\'un';
+        const tokens = await getTokensForUsers([recipientId], query);
+        const preview = body.content?.trim() || '📷';
+        sendPush(tokens, name, preview, { type: 'message', conversation_id: body.conversation_id });
+      }).catch(() => {});
 
       return reply.status(201).send({ message: result.rows[0] });
     } catch (err) {
