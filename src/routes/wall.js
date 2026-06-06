@@ -6,22 +6,33 @@ const { supabase } = require('../supabase');
 const FREE_USER_MESSAGE_LIMIT = 3;
 
 const WALL_THEMES = [
-  'Poste ton animal de compagnie 🐾',
-  'Ton plus beau sourire 😊',
-  'Ta tenue du jour 👗',
-  'Ton endroit préféré 📍',
-  'Ton plat favori 🍕',
-  'Ta passion cachée 🎨',
-  'Ton moment détente 🌿',
-  'Ta photo d\'enfance 👶',
-  'Ce qui te fait rire 😂',
-  'Ton sport favori ⚽',
-  'Ta plus belle vue 🌅',
-  'Ton rituel du matin ☕',
-  'Ta collection préférée 🎵',
-  'Ton coin lecture 📚',
-  'Ta photo nature 🌸',
-  'Ton look du weekend ✨',
+'Ton endroit préféré 📍',
+'Ta passion cachée 🎨',
+'Ton coin lecture 📚',
+'POV : ton bureau de survie',
+'Ta vue là, tout de suite',
+'Le dernier truc que tu as acheté',
+'Ta boisson du moment',
+'Ton setup pour chiller',
+'Lunch box ou resto',
+'Ton péché mignon à moins de 5€.',
+'Le meilleur spot de street-food du quartier.',
+'Le contenu de ton frigo à J-1 des courses.',
+'Ta cover Spotify du moment.',
+'Le livre que tu as sur ta table de nuit depuis 2 mois.',
+'Une capture d\'écran du dernier même qui t\'a fait rire.',
+'Un bout de ton quartier qui ressemble à un film.',
+'L\'endroit où tu te vides la tête.',
+'Le trajet que tu fais tous les jours.',
+'Un indice sur ce que tu vas faire ce soir.',
+'Ton écran d\'accueil (wall paper).',
+'Le dernier message marrant que tu as reçu',
+'Un objet que tu possèdes que tout le monde trouve bizarre.',
+'Ton outfit du jour',
+'Ta plante verte : vivante ou en train de mourir ?',
+'Tes chaussettes du jour.',
+'Ton workspace',
+'Poste ton animal de compagnie 🐾'
 ];
 
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
@@ -86,9 +97,30 @@ async function wallRoutes(app) {
       const userId = getUserId(request);
       const theme = await getActiveTheme();
 
-      //delete in 3 days
       const cutoff = new Date(Date.now() - THREE_DAYS_MS).toISOString();
+
+      // Fetch expired posts so we can remove their storage files
+      const expired = await query('SELECT wall_photo FROM wall WHERE created_at < $1', [cutoff]);
+
+      // Delete DB rows
       await query('DELETE FROM wall WHERE created_at < $1', [cutoff]);
+
+      // Remove storage files for all expired posts (fire-and-forget)
+      if (expired.rows.length > 0) {
+        const filenames = [];
+        for (const row of expired.rows) {
+          const photos = Array.isArray(row.wall_photo) ? row.wall_photo : JSON.parse(row.wall_photo || '[]');
+          for (const url of photos) {
+            const match = String(url).match(/user_photos\/(.+)$/);
+            if (match) filenames.push(match[1]);
+          }
+        }
+        if (filenames.length > 0) {
+          supabase.storage.from('user_photos').remove(filenames).catch((err) =>
+            console.error('Wall auto-cleanup storage error (non-fatal):', err)
+          );
+        }
+      }
 
       let result;
       try {

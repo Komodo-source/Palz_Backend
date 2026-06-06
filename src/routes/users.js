@@ -189,6 +189,7 @@ async function userRoutes(app) {
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
+  
 
 
 

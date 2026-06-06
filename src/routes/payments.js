@@ -6,20 +6,27 @@ const { exposeErrorDetails } = require('../debug');
 let _stripe = null;
 function getStripe() {
   if (!process.env.STRIPE_SECRET_KEY) return null;
-  if (!_stripe) {
-    _stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-  }
+  if (!_stripe) _stripe = Stripe(process.env.STRIPE_SECRET_KEY);
   return _stripe;
 }
+
+// PaymentIntent states where the user can still complete payment
+const PI_RETRYABLE = new Set(['requires_payment_method', 'requires_confirmation', 'requires_action']);
 
 async function paymentRoutes(fastify) {
 
   // ── POST /create-payment-sheet ─────────────────────────────────────────────
-  // Creates a Stripe Customer + monthly Subscription and returns the three
-  // values needed by @stripe/stripe-react-native's initPaymentSheet.
+  // Idempotent: if the user already has a pending payment intent (e.g. they
+  // timed out mid-flow), the same client_secret is returned so they resume the
+  // same charge rather than getting billed a second time.
   fastify.post('/create-payment-sheet', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
+      const { idempotency_key } = request.body || {};
+
+      if (!idempotency_key || typeof idempotency_key !== 'string' || idempotency_key.length > 128) {
+        return reply.status(400).send({ error: 'idempotency_key is required (max 128 chars)' });
+      }
 
       const userRes = await query(
         'SELECT email, full_name, stripe_customer_id, is_premium FROM users WHERE id = $1',
@@ -30,12 +37,69 @@ async function paymentRoutes(fastify) {
       if (user.is_premium) return reply.status(400).send({ error: 'Already premium', already_premium: true });
 
       const stripe = getStripe();
-      if (!stripe) {
-        return reply.status(503).send({ error: 'Stripe not configured on this server' });
+      if (!stripe) return reply.status(503).send({ error: 'Stripe not configured on this server' });
+      if (!process.env.STRIPE_PRICE_ID) return reply.status(503).send({ error: 'STRIPE_PRICE_ID not set' });
+
+      // ── Check for any active (non-terminal) payment event for this user ───
+      // This is the core idempotency guard: if the user timed out mid-payment,
+      // we reuse the existing PaymentIntent instead of creating a new charge.
+      const activeRes = await query(
+        `SELECT * FROM payment_events
+         WHERE user_id = $1 AND status IN ('initiated', 'processing')
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId]
+      );
+
+      if (activeRes.rows.length > 0) {
+        const evt = activeRes.rows[0];
+
+        if (evt.stripe_payment_intent_id) {
+          try {
+            const pi = await stripe.paymentIntents.retrieve(evt.stripe_payment_intent_id);
+
+            if (pi.status === 'succeeded') {
+              // PI already succeeded (e.g. confirm endpoint was missed) — activate premium now
+              await query(
+                `UPDATE users
+                 SET is_premium = true,
+                     premium_since = COALESCE(premium_since, NOW()),
+                     premium_expires_at = NOW() + INTERVAL '1 month'
+                 WHERE id = $1`,
+                [userId]
+              );
+              await query(
+                `UPDATE payment_events SET status = 'succeeded', updated_at = NOW() WHERE id = $1`,
+                [evt.id]
+              );
+              return reply.status(400).send({ error: 'Already premium', already_premium: true });
+            }
+
+            if (PI_RETRYABLE.has(pi.status)) {
+              // Safe to resume: return the same PI so no second charge is created
+              const ephemeralKey = await stripe.ephemeralKeys.create(
+                { customer: evt.stripe_customer_id },
+                { apiVersion: '2024-06-20' }
+              );
+              return reply.send({
+                paymentIntent: pi.client_secret,
+                ephemeralKey: ephemeralKey.secret,
+                customer: evt.stripe_customer_id,
+              });
+            }
+
+            // PI is in a terminal failure state — mark it and fall through to create new
+            await query(
+              `UPDATE payment_events SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+              [evt.id]
+            );
+          } catch (stripeErr) {
+            console.warn('Could not retrieve existing PI from Stripe:', stripeErr.message);
+            // Fall through and create a new attempt
+          }
+        }
       }
-      if (!process.env.STRIPE_PRICE_ID) {
-        return reply.status(503).send({ error: 'STRIPE_PRICE_ID not set' });
-      }
+
+      // ── Create new payment attempt ─────────────────────────────────────────
 
       // Get or create Stripe Customer
       let customerId = user.stripe_customer_id;
@@ -49,25 +113,45 @@ async function paymentRoutes(fastify) {
         await query('UPDATE users SET stripe_customer_id = $1 WHERE id = $2', [customerId, userId]);
       }
 
-      // Ephemeral key for the Payment Sheet
+      // Insert payment_events row BEFORE calling Stripe so the record exists
+      // even if the process crashes between the Stripe call and the UPDATE below.
+      await query(
+        `INSERT INTO payment_events (idempotency_key, user_id, stripe_customer_id, status)
+         VALUES ($1, $2, $3, 'initiated')
+         ON CONFLICT (idempotency_key) DO UPDATE SET updated_at = NOW()`,
+        [idempotency_key, userId, customerId]
+      );
+
       const ephemeralKey = await stripe.ephemeralKeys.create(
         { customer: customerId },
         { apiVersion: '2024-06-20' }
       );
 
-      // Create subscription (incomplete until payment succeeds)
-      const subscription = await stripe.subscriptions.create({
-        customer: customerId,
-        items: [{ price: process.env.STRIPE_PRICE_ID }],
-        payment_behavior: 'default_incomplete',
-        payment_settings: { save_default_payment_method: 'on_subscription' },
-        expand: ['latest_invoice.payment_intent'],
-        metadata: { palz_user_id: userId },
-      });
+      // Use the frontend-supplied idempotency key as Stripe's idempotency key
+      // so repeated retries with the same key never create duplicate subscriptions.
+      const subscription = await stripe.subscriptions.create(
+        {
+          customer: customerId,
+          items: [{ price: process.env.STRIPE_PRICE_ID }],
+          payment_behavior: 'default_incomplete',
+          payment_settings: { save_default_payment_method: 'on_subscription' },
+          expand: ['latest_invoice.payment_intent'],
+          metadata: { palz_user_id: userId },
+        },
+        { idempotencyKey: `sub_${idempotency_key}` }
+      );
 
       const paymentIntent = subscription.latest_invoice.payment_intent;
 
-      // Persist subscription ID so we can cancel later
+      await query(
+        `UPDATE payment_events
+         SET stripe_subscription_id = $1,
+             stripe_payment_intent_id = $2,
+             status = 'processing',
+             updated_at = NOW()
+         WHERE idempotency_key = $3`,
+        [subscription.id, paymentIntent.id, idempotency_key]
+      );
       await query('UPDATE users SET stripe_subscription_id = $1 WHERE id = $2', [subscription.id, userId]);
 
       return reply.send({
@@ -85,8 +169,8 @@ async function paymentRoutes(fastify) {
   });
 
   // ── POST /confirm ──────────────────────────────────────────────────────────
-  // Called by the frontend immediately after presentPaymentSheet() succeeds.
-  // Verifies the PaymentIntent with Stripe and activates premium.
+  // Fast-path called by the frontend right after presentPaymentSheet() succeeds.
+  // Verifies the PI belongs to the requesting user before activating premium.
   fastify.post('/confirm', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
@@ -97,8 +181,15 @@ async function paymentRoutes(fastify) {
       }
 
       const stripe = getStripe();
-      if (!stripe) {
-        return reply.status(503).send({ error: 'Stripe not configured on this server' });
+      if (!stripe) return reply.status(503).send({ error: 'Stripe not configured on this server' });
+
+      // Verify this PI was created for the authenticated user
+      const evtRes = await query(
+        'SELECT id FROM payment_events WHERE stripe_payment_intent_id = $1 AND user_id = $2',
+        [payment_intent_id, userId]
+      );
+      if (evtRes.rows.length === 0) {
+        return reply.status(403).send({ error: 'Payment intent not found for this user' });
       }
 
       const pi = await stripe.paymentIntents.retrieve(payment_intent_id);
@@ -114,11 +205,20 @@ async function paymentRoutes(fastify) {
          WHERE id = $1`,
         [userId]
       );
+      await query(
+        `UPDATE payment_events
+         SET status = 'succeeded', stripe_event_type = 'frontend_confirm', updated_at = NOW()
+         WHERE stripe_payment_intent_id = $1`,
+        [payment_intent_id]
+      );
 
       return reply.send({ activated: true });
     } catch (err) {
       console.error('confirm error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+      return reply.status(500).send({
+        error: 'Internal server error',
+        details: exposeErrorDetails(request) ? err.message : undefined,
+      });
     }
   });
 
@@ -151,102 +251,32 @@ async function paymentRoutes(fastify) {
       if (!subId) return reply.status(404).send({ error: 'No active subscription found' });
 
       const stripe = getStripe();
-      if (!stripe) {
-        return reply.status(503).send({ error: 'Stripe not configured on this server' });
-      }
+      if (!stripe) return reply.status(503).send({ error: 'Stripe not configured on this server' });
 
       await stripe.subscriptions.cancel(subId);
       await query(
-        'UPDATE users SET is_premium = false, stripe_subscription_id = NULL, premium_expires_at = NOW() WHERE id = $1',
+        `UPDATE users
+         SET is_premium = false, stripe_subscription_id = NULL, premium_expires_at = NOW()
+         WHERE id = $1`,
         [userId]
+      );
+      await query(
+        `UPDATE payment_events
+         SET status = 'canceled', stripe_event_type = 'user_canceled', updated_at = NOW()
+         WHERE stripe_subscription_id = $1 AND status NOT IN ('failed', 'canceled')`,
+        [subId]
       );
 
       return reply.send({ cancelled: true });
     } catch (err) {
       console.error('cancel error:', err);
-      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+      return reply.status(500).send({
+        error: 'Internal server error',
+        details: exposeErrorDetails(request) ? err.message : undefined,
+      });
     }
   });
 
-  // ── POST /webhook ──────────────────────────────────────────────────────────
-  // Stripe sends events here. Requires raw body for signature verification.
-  // Register as a nested plugin so it gets its own content-type parser scope.
-  fastify.register(async function webhookPlugin(app) {
-    app.removeContentTypeParser('application/json');
-    app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
-      done(null, body); // raw Buffer — needed for stripe.webhooks.constructEvent
-    });
-
-    app.post('/webhook', async (request, reply) => {
-      const sig = request.headers['stripe-signature'];
-      let event;
-
-      if (process.env.STRIPE_WEBHOOK_SECRET && sig) {
-        const stripe = getStripe();
-        if (!stripe) {
-          return reply.status(503).send({ error: 'Stripe not configured on this server' });
-        }
-        try {
-          event = stripe.webhooks.constructEvent(request.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-        } catch (err) {
-          console.error('Webhook signature error:', err.message);
-          return reply.status(400).send(`Webhook Error: ${err.message}`);
-        }
-      } else {
-        // Dev mode — no signature verification
-        try { event = JSON.parse(request.body.toString()); }
-        catch { return reply.status(400).send('Invalid JSON'); }
-      }
-
-      try {
-        switch (event.type) {
-          case 'invoice.payment_succeeded': {
-            const invoice = event.data.object;
-            if (['subscription_create', 'subscription_cycle'].includes(invoice.billing_reason)) {
-              await query(
-                `UPDATE users
-                 SET is_premium = true,
-                     premium_since = COALESCE(premium_since, NOW()),
-                     premium_expires_at = NOW() + INTERVAL '1 month'
-                 WHERE stripe_customer_id = $1`,
-                [invoice.customer]
-              );
-            }
-            break;
-          }
-          case 'invoice.payment_failed': {
-            const invoice = event.data.object;
-            // Let the user keep premium until the period ends — Stripe will retry
-            console.warn('Payment failed for customer:', invoice.customer);
-            break;
-          }
-          case 'customer.subscription.deleted': {
-            const sub = event.data.object;
-            await query(
-              'UPDATE users SET is_premium = false, stripe_subscription_id = NULL WHERE stripe_customer_id = $1',
-              [sub.customer]
-            );
-            break;
-          }
-          case 'customer.subscription.updated': {
-            const sub = event.data.object;
-            if (sub.status === 'active') {
-              await query('UPDATE users SET is_premium = true WHERE stripe_customer_id = $1', [sub.customer]);
-            } else if (['canceled', 'unpaid'].includes(sub.status)) {
-              await query('UPDATE users SET is_premium = false WHERE stripe_customer_id = $1', [sub.customer]);
-            }
-            break;
-          }
-          default:
-            break;
-        }
-      } catch (err) {
-        console.error('Webhook handler error:', err);
-      }
-
-      return reply.send({ received: true });
-    });
-  });
 }
 
 module.exports = { paymentRoutes };
