@@ -75,7 +75,8 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   async function get_weather(city){
     try{
 
-      const apiKey = '0c27d67d5ad3c0a1e608f12a8b5180d7';
+      const apiKey = process.env.OPENWEATHER_API_KEY;
+      if (!apiKey) return null;
       let query = city || "Paris,FR";
       const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(query)}&units=metric&lang=fr&appid=${apiKey}`);
       if (!res.ok) throw new Error('Weather fetch failed');

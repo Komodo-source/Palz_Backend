@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { query } = require('../db');
+const { query, withTransaction } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 
@@ -8,8 +8,15 @@ const swipeSchema = z.object({
   direction: z.enum(['left', 'right']),
 });
 
+const uuidSchema = z.string().uuid();
+
 async function swipeRoutes(app) {
-  app.post('/', { preHandler: [app.authenticate] }, async (request, reply) => {
+  // ── Rate limiting renforcé sur les swipes ──
+  const swipeRateLimit = {
+    config: { rateLimit: { max: 100, timeWindow: '1 minute' } },
+  };
+
+  app.post('/', { preHandler: [app.authenticate], ...swipeRateLimit }, async (request, reply) => {
     try {
       const userId = getUserId(request);
       const body = swipeSchema.parse(request.body);
@@ -18,65 +25,67 @@ async function swipeRoutes(app) {
         return reply.status(400).send({ error: 'Cannot swipe on yourself' });
       }
 
-      // Record the view
+      // Vérifier que l\'utilisateur cible existe
+      const targetExists = await query('SELECT 1 FROM users WHERE id = $1', [body.target_id]);
+      if (targetExists.rows.length === 0) {
+        return reply.status(404).send({ error: 'User not found' });
+      }
+
+      // Enregistrer la vue
       await query(
         `INSERT INTO viewed_users (viewer_id, viewed_id)
-         VALUES ($1, $2)
-         ON CONFLICT (viewer_id, viewed_id) DO NOTHING`,
+         VALUES ($1, $2) ON CONFLICT (viewer_id, viewed_id) DO NOTHING`,
         [userId, body.target_id]
       );
 
-      if (body.direction === 'right') {
-        // Record the like
-        await query(
+      if (body.direction !== 'right') {
+        return reply.send({ liked: false, matched: false });
+      }
+
+      // Like + vérification de match dans une transaction atomique
+      const result = await withTransaction(async (client) => {
+        // Enregistrer le like
+        await client.query(
           `INSERT INTO user_likes (liker_id, liked_id)
-           VALUES ($1, $2)
-           ON CONFLICT (liker_id, liked_id) DO NOTHING`,
+           VALUES ($1, $2) ON CONFLICT (liker_id, liked_id) DO NOTHING`,
           [userId, body.target_id]
         );
 
-        // Check if it's a match (mutual like)
-        const matchResult = await query(
-          `SELECT id FROM user_likes
-           WHERE liker_id = $1 AND liked_id = $2`,
+        // Vérifier le match mutuel
+        const matchCheck = await client.query(
+          `SELECT id FROM user_likes WHERE liker_id = $1 AND liked_id = $2`,
           [body.target_id, userId]
         );
 
-        const isMatch = matchResult.rows.length > 0;
+        if (matchCheck.rows.length === 0) {
+          return { liked: true, matched: false, conversation_id: null };
+        }
 
-        if (isMatch) {
-          // Check if conversation already exists (either direction)
-          const existingConv = await query(
+        // Créer la conversation de manière idempotente
+        const convResult = await client.query(
+          `INSERT INTO personal_conversations (user_initiator, user_receiver)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING
+           RETURNING id`,
+          [userId, body.target_id]
+        );
+
+        let conversationId = convResult.rows[0]?.id ?? null;
+
+        if (!conversationId) {
+          const existing = await client.query(
             `SELECT id FROM personal_conversations
              WHERE (user_initiator = $1 AND user_receiver = $2)
                 OR (user_initiator = $2 AND user_receiver = $1)`,
             [userId, body.target_id]
           );
-
-          let conversationId = null;
-          if (existingConv.rows.length > 0) {
-            conversationId = existingConv.rows[0].id;
-          } else {
-            const convResult = await query(
-              `INSERT INTO personal_conversations (user_initiator, user_receiver)
-               VALUES ($1, $2)
-               RETURNING id`,
-              [userId, body.target_id]
-            );
-            conversationId = convResult.rows[0] ? convResult.rows[0].id : null;
-          }
-
-          return reply.send({
-            liked: true,
-            matched: true,
-            conversation_id: conversationId,
-          });
+          conversationId = existing.rows[0]?.id ?? null;
         }
 
-        return reply.send({ liked: true, matched: false });
-      }
+        return { liked: true, matched: true, conversation_id: conversationId };
+      });
 
-      return reply.send({ liked: false, matched: false });
+      return reply.send(result);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
@@ -146,23 +155,29 @@ async function swipeRoutes(app) {
     }
   });
 
-  // Block a user (also removes any likes between them)
+  // ── Block — avec validation UUID de la cible ──
   app.post('/block/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      const { id: blockedId } = request.params;
+      const parseResult = uuidSchema.safeParse(request.params.id);
+      if (!parseResult.success) {
+        return reply.status(400).send({ error: 'Invalid user id' });
+      }
+      const blockedId = parseResult.data;
 
-      // Remove any likes between these users (both directions)
+      if (blockedId === userId) {
+        return reply.status(400).send({ error: 'Cannot block yourself' });
+      }
+
       await query(
-        `DELETE FROM user_likes WHERE (liker_id = $1 AND liked_id = $2) OR (liker_id = $2 AND liked_id = $1)`,
+        `DELETE FROM user_likes
+         WHERE (liker_id = $1 AND liked_id = $2) OR (liker_id = $2 AND liked_id = $1)`,
         [userId, blockedId]
       );
 
-      // Insert block
       await query(
         `INSERT INTO blocked_users (blocker_id, blocked_id)
-         VALUES ($1, $2)
-         ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+         VALUES ($1, $2) ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
         [userId, blockedId]
       );
 

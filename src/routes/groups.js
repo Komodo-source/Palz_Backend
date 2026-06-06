@@ -1011,4 +1011,4 @@ async function groupRoutes(app) {
   });
 }
 
-module.exports = { groupRoutes };
+module.exports = { groupRoutes, findGroupCommonInterest };

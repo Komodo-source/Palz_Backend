@@ -195,7 +195,19 @@ async function userRoutes(app) {
 
   app.get('/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
+      const requesterId = getUserId(request);
       const { id } = request.params;
+
+      // Vérifier qu'aucune relation de blocage n'existe dans les deux sens
+      const blockCheck = await query(
+        `SELECT 1 FROM blocked_users
+         WHERE (blocker_id = $1 AND blocked_id = $2)
+            OR (blocker_id = $2 AND blocked_id = $1)`,
+        [requesterId, id]
+      );
+      if (blockCheck.rows.length > 0) {
+        return reply.status(403).send({ error: 'Accès refusé' });
+      }
 
       const result = await query(
         `SELECT u.id, u.full_name, u.user_name, u.date_of_birth, u.profile_image, u.bio,

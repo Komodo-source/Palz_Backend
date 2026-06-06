@@ -3,6 +3,7 @@ const { getUserId } = require('../middleware/auth');
 const { supabase } = require('../supabase');
 const { query } = require('../db');
 const { exposeErrorDetails } = require('../debug');
+const { checkImageSafety } = require('../content_filtering');
 
 function sanitizeName(name) {
   return name
@@ -61,6 +62,12 @@ async function uploadRoutes(app) {
         chunks.push(chunk);
       }
       const rawBuffer = Buffer.concat(chunks);
+
+      // Vérification de sécurité du contenu (magic bytes + NSFW)
+      const safety = await checkImageSafety(rawBuffer, data.mimetype);
+      if (!safety.safe) {
+        return reply.status(400).send({ error: `Contenu refusé : ${safety.reason}` });
+      }
 
       // Compress with Sharp (auto-rotates EXIF, resizes, converts to JPEG)
       const { buffer, contentType } = await compressImage(rawBuffer);
