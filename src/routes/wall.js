@@ -99,11 +99,15 @@ async function wallRoutes(app) {
 
       const cutoff = new Date(Date.now() - THREE_DAYS_MS).toISOString();
 
-      // Fetch expired posts so we can remove their storage files
-      const expired = await query('SELECT wall_photo FROM wall WHERE created_at < $1', [cutoff]);
-
-      // Delete DB rows
-      await query('DELETE FROM wall WHERE created_at < $1', [cutoff]);
+      // Delete posts from old themes OR posts older than 3 days, and clean up their storage files
+      const expired = await query(
+        'SELECT wall_photo FROM wall WHERE theme_id != $1 OR created_at < $2',
+        [theme.id, cutoff]
+      );
+      await query(
+        'DELETE FROM wall WHERE theme_id != $1 OR created_at < $2',
+        [theme.id, cutoff]
+      );
 
       // Remove storage files for all expired posts (fire-and-forget)
       if (expired.rows.length > 0) {

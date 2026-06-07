@@ -215,6 +215,7 @@ async function groupRoutes(app) {
       const result = await query(
         `SELECT wg.id, wg.group_id, wg.week_start, wg.week_end,
                 wg.common_interest, wg.rendezvous_location, wg.rendezvous_time,
+                COALESCE(wg.rendezvous_suggestions, '[]'::jsonb) AS rendezvous_suggestions,
                 wg.is_active, wg.created_at,
                 dg.title, dg.description, dg.photo, dg.category
          FROM weekly_groups wg
@@ -891,6 +892,109 @@ async function groupRoutes(app) {
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
+  // ── POST add a rendez-vous suggestion ──
+  app.post('/rendezvous-suggest', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weekly_group_id, location, time } = request.body;
+
+      if (!weekly_group_id || !location) {
+        return reply.status(400).send({ error: 'weekly_group_id and location are required' });
+      }
+
+      const memberCheck = await query(
+        `SELECT 1 FROM weekly_groups wg
+         JOIN group_participants gp ON gp.group_id = wg.group_id
+         WHERE wg.id = $1 AND gp.user_id = $2`,
+        [weekly_group_id, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this group' });
+      }
+
+      const userRes = await query('SELECT full_name, user_name FROM users WHERE id = $1', [userId]);
+      const user = userRes.rows[0] || {};
+      const userName = user.full_name || user.user_name || 'Anonyme';
+
+      const existing = await query(
+        `SELECT COALESCE(rendezvous_suggestions, '[]'::jsonb) AS suggestions FROM weekly_groups WHERE id = $1`,
+        [weekly_group_id]
+      );
+      const suggestions = existing.rows[0]?.suggestions || [];
+      const newSuggestion = {
+        id: Date.now(),
+        user_id: userId,
+        user_name: userName,
+        location: location.trim(),
+        time: time || null,
+        likes: [],
+      };
+      suggestions.push(newSuggestion);
+
+      await query(
+        `UPDATE weekly_groups SET rendezvous_suggestions = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+        [weekly_group_id, JSON.stringify(suggestions)]
+      );
+
+      // Push notification (fire-and-forget)
+      Promise.all([
+        query(`SELECT dg.title FROM weekly_groups wg JOIN discussion_groups dg ON dg.id = wg.group_id WHERE wg.id = $1`, [weekly_group_id]),
+        query(`SELECT gp.user_id FROM weekly_groups wg JOIN group_participants gp ON gp.group_id = wg.group_id WHERE wg.id = $1`, [weekly_group_id]),
+      ]).then(async ([groupRes, membersRes]) => {
+        const groupTitle = groupRes.rows[0]?.title || 'Votre groupe';
+        const memberIds = membersRes.rows.map((r) => r.user_id).filter((id) => id !== userId);
+        const tokens = await getTokensForUsers(memberIds, query);
+        sendPush(tokens, `${groupTitle} — Nouvelle suggestion 📍`, `${userName} propose : ${location}`, { type: 'rendezvous', weekly_group_id });
+      }).catch(() => {});
+
+      return reply.status(201).send({ suggestion: newSuggestion });
+    } catch (err) {
+      console.error('Rendezvous suggest error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── POST toggle like on a rendez-vous suggestion ──
+  app.post('/:weeklyGroupId/rendezvous-like/:suggestionId', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weeklyGroupId, suggestionId } = request.params;
+      const sidNum = parseInt(suggestionId, 10);
+
+      const memberCheck = await query(
+        `SELECT 1 FROM weekly_groups wg
+         JOIN group_participants gp ON gp.group_id = wg.group_id
+         WHERE wg.id = $1 AND gp.user_id = $2`,
+        [weeklyGroupId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this group' });
+      }
+
+      const existing = await query(
+        `SELECT COALESCE(rendezvous_suggestions, '[]'::jsonb) AS suggestions FROM weekly_groups WHERE id = $1`,
+        [weeklyGroupId]
+      );
+      const suggestions = existing.rows[0]?.suggestions || [];
+      const idx = suggestions.findIndex((s) => s.id === sidNum);
+      if (idx === -1) return reply.status(404).send({ error: 'Suggestion not found' });
+
+      const likes = suggestions[idx].likes || [];
+      const alreadyLiked = likes.includes(userId);
+      suggestions[idx].likes = alreadyLiked ? likes.filter((id) => id !== userId) : [...likes, userId];
+
+      await query(
+        `UPDATE weekly_groups SET rendezvous_suggestions = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+        [weeklyGroupId, JSON.stringify(suggestions)]
+      );
+
+      return reply.send({ liked: !alreadyLiked, suggestion: suggestions[idx] });
+    } catch (err) {
+      console.error('Rendezvous like error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
   // ── POST toggle vote on an activity suggestion ──
   app.post('/:weeklyGroupId/activity-vote', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {

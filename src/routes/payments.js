@@ -153,6 +153,8 @@ async function paymentRoutes(fastify) {
         [subscription.id, paymentIntent.id, idempotency_key]
       );
       await query('UPDATE users SET stripe_subscription_id = $1 WHERE id = $2', [subscription.id, userId]);
+      console.log("paymentIntent", paymentIntent);
+      console.log("subscription", subscription);
 
       return reply.send({
         paymentIntent: paymentIntent.client_secret,
