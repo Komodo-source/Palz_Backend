@@ -995,6 +995,39 @@ async function groupRoutes(app) {
     }
   });
 
+  // ── POST report a group ──
+  app.post('/:weeklyGroupId/report', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { weeklyGroupId } = request.params;
+      const { reason } = request.body || {};
+
+      if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+        return reply.status(400).send({ error: 'reason is required' });
+      }
+
+      const memberCheck = await query(
+        `SELECT 1 FROM weekly_groups wg
+         JOIN group_participants gp ON gp.group_id = wg.group_id
+         WHERE wg.id = $1 AND gp.user_id = $2`,
+        [weeklyGroupId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not a member of this group' });
+      }
+
+      await query(
+        `INSERT INTO reported_groups (reporter_id, group_id, reason) VALUES ($1, $2, $3)`,
+        [userId, weeklyGroupId, reason.trim()]
+      );
+
+      return reply.send({ reported: true });
+    } catch (err) {
+      console.error('Report group error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
   // ── POST toggle vote on an activity suggestion ──
   app.post('/:weeklyGroupId/activity-vote', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {

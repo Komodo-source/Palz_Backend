@@ -141,7 +141,17 @@ async function paymentRoutes(fastify) {
         { idempotencyKey: `sub_${idempotency_key}` }
       );
 
-      const paymentIntent = subscription.latest_invoice.payment_intent;
+      const invoice = subscription.latest_invoice;
+      let paymentIntent = invoice?.payment_intent;
+
+      // expand may not cascade — payment_intent might be a string ID
+      if (typeof paymentIntent === 'string') {
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+      }
+
+      if (!paymentIntent) {
+        return reply.status(500).send({ error: 'Paiement non initialisé par Stripe. Réessaie.' });
+      }
 
       await query(
         `UPDATE payment_events
@@ -153,8 +163,6 @@ async function paymentRoutes(fastify) {
         [subscription.id, paymentIntent.id, idempotency_key]
       );
       await query('UPDATE users SET stripe_subscription_id = $1 WHERE id = $2', [subscription.id, userId]);
-      console.log("paymentIntent", paymentIntent);
-      console.log("subscription", subscription);
 
       return reply.send({
         paymentIntent: paymentIntent.client_secret,
