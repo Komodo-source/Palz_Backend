@@ -3,7 +3,7 @@ const { getUserId } = require('../middleware/auth');
 const { supabase } = require('../supabase');
 const { query } = require('../db');
 const { exposeErrorDetails } = require('../debug');
-const { checkImageSafety } = require('../content_filtering');
+const { checkImageSafety, checkImageNSFW } = require('../content_filtering');
 
 function sanitizeName(name) {
   return name
@@ -67,6 +67,10 @@ async function uploadRoutes(app) {
       const safety = await checkImageSafety(rawBuffer, data.mimetype);
       if (!safety.safe) {
         return reply.status(400).send({ error: `Contenu refusé : ${safety.reason}` });
+      }
+      const NSFW_image = await checkImageNSFW(rawBuffer);
+      if (!NSFW_image.safe) {
+        return reply.status(400).send({ nsfw: true });
       }
 
       // Compress with Sharp (auto-rotates EXIF, resizes, converts to JPEG)

@@ -21,6 +21,7 @@
     "fastify": "^5.8.5",
     "google-auth-library": "^10.6.2",
     "node-cron": "^3.0.3",
+    "nsfwjs": "^4.3.0",
     "pg": "^8.21.0",
     "sharp": "^0.33.5",
     "stripe": "^22.1.1",

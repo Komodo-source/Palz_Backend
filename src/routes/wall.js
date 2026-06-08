@@ -179,7 +179,6 @@ async function wallRoutes(app) {
       if (!wallPhoto || !Array.isArray(wallPhoto) || wallPhoto.length === 0) {
         return reply.status(400).send({ error: 'wall_photo must be a non-empty array of image URLs' });
       }
-
       const theme = await getActiveTheme();
 
       const result = await query(

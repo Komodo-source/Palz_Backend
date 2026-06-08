@@ -1,12 +1,8 @@
 const BAN_WORD_LIST = [
-  // Contenu haineux
   'nigger', 'nigga', 'faggot', 'tranny', 'retard', 'spic', 'chink', 'kike',
-  // Contenu sexuel explicite
-  'pornhub', 'onlyfans', 'nude', 'nudes',
-  // Harcèlement / menaces
-  'je vais te tuer', 'va mourir', 'suicide toi', 'crève',
-  // Spam
-  'bitcoin gratuit', 'argent facile', 'cliquez ici pour gagner',
+  'pornhub', 'onlyfans', 'nude', 'nudes','of','mym','0f',
+  'je vais te tuer', 'va mourir', 'suicide toi', 'crève','suicide', 'viol',
+  'bitcoin', 'argent facile', 'cliquez ici pour gagner',
 ];
 
 const MAGIC_BYTES = {
@@ -26,6 +22,38 @@ function validateMagicBytes(buffer, mimeType) {
   return buffer.slice(0, sig.length).equals(sig);
 }
 
+
+// Cached once at first use — model is ~80 MB, loading per-request would be too slow
+let _nsfwModel = null;
+async function getNsfwModel() {
+  if (!_nsfwModel) {
+    const nsfw = require('nsfwjs');
+    _nsfwModel = await nsfw.load();
+  }
+  return _nsfwModel;
+}
+
+async function checkImageNSFW(buffer) {
+  const tf = require('@tensorflow/tfjs');
+  const sharp = require('sharp');
+
+  const { data, info } = await sharp(buffer)
+    .resize(224, 224)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const model = await getNsfwModel();
+  const tensor = tf.tensor3d(new Uint8Array(data), [info.height, info.width, 3]);
+  const predictions = await model.classify(tensor);
+  tensor.dispose();
+
+  const unsafe = predictions.find(
+    (p) => ['Porn', 'Hentai'].includes(p.className) && p.probability > 0.7
+  );
+  return { safe: !unsafe, prediction: unsafe || null };
+}
+
 /**
  * Vérifie un texte contre la liste de mots interdits.
  * Retourne le mot trouvé ou null si le contenu est propre.
@@ -36,27 +64,13 @@ function checkTextContent(text) {
   return BAN_WORD_LIST.find((word) => lower.includes(word)) || null;
 }
 
-/**
- * Vérification de sécurité côté serveur pour les images uploadées.
- *
- * NOTE production : intégrer une API NSFW dédiée :
- *   - Google Cloud Vision SafeSearch API
- *   - AWS Rekognition DetectModerationLabels
- *   - Azure Content Moderator
- *
- * Exemple Google Vision :
- *   const [result] = await visionClient.safeSearchDetection({ image: { content: buffer } });
- *   const { adult, violence } = result.safeSearchAnnotation;
- *   const blocked = ['LIKELY', 'VERY_LIKELY'];
- *   if (blocked.includes(adult) || blocked.includes(violence))
- *     return { safe: false, reason: 'NSFW content detected' };
- */
+
 async function checkImageSafety(buffer, mimeType) {
   if (!validateMagicBytes(buffer, mimeType)) {
     return { safe: false, reason: 'Magic bytes mismatch — possible file type spoofing' };
   }
-  // TODO: remplacer par un appel à l'API de modération en production
+
   return { safe: true };
 }
 
-module.exports = { checkImageSafety, checkTextContent, validateMagicBytes, BAN_WORD_LIST };
+module.exports = { checkImageSafety, checkTextContent, validateMagicBytes, BAN_WORD_LIST, checkImageNSFW };
