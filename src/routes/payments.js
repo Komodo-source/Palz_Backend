@@ -135,21 +135,44 @@ async function paymentRoutes(fastify) {
           items: [{ price: process.env.STRIPE_PRICE_ID }],
           payment_behavior: 'default_incomplete',
           payment_settings: { save_default_payment_method: 'on_subscription' },
-          expand: ['latest_invoice.payment_intent'],
           metadata: { palz_user_id: userId },
         },
         { idempotencyKey: `sub_${idempotency_key}` }
       );
 
-      const invoice = subscription.latest_invoice;
-      let paymentIntent = invoice?.payment_intent;
+      // Fetch the invoice explicitly — nested expand on subscription create is unreliable
+      const invoiceId = typeof subscription.latest_invoice === 'string'
+        ? subscription.latest_invoice
+        : subscription.latest_invoice?.id;
 
-      // expand may not cascade — payment_intent might be a string ID
+      if (!invoiceId) {
+        return reply.status(500).send({ error: 'Stripe n\'a pas créé de facture pour cet abonnement.' });
+      }
+
+      const invoice = await stripe.invoices.retrieve(invoiceId, {
+        expand: ['payment_intent'],
+      });
+
+      let paymentIntent = invoice.payment_intent;
+
+      // payment_intent might still be a string if expand didn't work
       if (typeof paymentIntent === 'string') {
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
       }
 
       if (!paymentIntent) {
+        // Subscription may already be active (trial, $0, or auto-charged card on file)
+        if (subscription.status === 'active') {
+          await query(
+            `UPDATE users SET is_premium = true, premium_since = COALESCE(premium_since, NOW()), premium_expires_at = NOW() + INTERVAL '1 month' WHERE id = $1`,
+            [userId]
+          );
+          await query(
+            `UPDATE payment_events SET status = 'succeeded', updated_at = NOW() WHERE idempotency_key = $1`,
+            [idempotency_key]
+          );
+          return reply.send({ activated: true });
+        }
         return reply.status(500).send({ error: 'Paiement non initialisé par Stripe. Réessaie.' });
       }
 
