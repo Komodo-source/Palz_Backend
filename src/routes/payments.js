@@ -161,8 +161,8 @@ async function paymentRoutes(fastify) {
       }
 
       if (!paymentIntent) {
-        // Subscription may already be active (trial, $0, or auto-charged card on file)
-        if (subscription.status === 'active') {
+        // No immediate payment needed: already active or in trial period
+        if (subscription.status === 'active' || subscription.status === 'trialing') {
           await query(
             `UPDATE users SET is_premium = true, premium_since = COALESCE(premium_since, NOW()), premium_expires_at = NOW() + INTERVAL '1 month' WHERE id = $1`,
             [userId]
@@ -173,7 +173,25 @@ async function paymentRoutes(fastify) {
           );
           return reply.send({ activated: true });
         }
-        return reply.status(500).send({ error: 'Paiement non initialisé par Stripe. Réessaie.' });
+
+        // Invoice not yet finalized by Stripe — finalize it to generate the PaymentIntent
+        if (invoice.status === 'draft') {
+          try {
+            const finalized = await stripe.invoices.finalizeInvoice(invoiceId, {
+              expand: ['payment_intent'],
+            });
+            paymentIntent = finalized.payment_intent;
+            if (typeof paymentIntent === 'string') {
+              paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+            }
+          } catch (finalizeErr) {
+            console.warn('Invoice finalization failed:', finalizeErr.message);
+          }
+        }
+
+        if (!paymentIntent) {
+          return reply.status(500).send({ error: 'Paiement non initialisé par Stripe. Réessaie.' });
+        }
       }
 
       await query(
