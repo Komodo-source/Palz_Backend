@@ -6,6 +6,7 @@ const multipart = require('@fastify/multipart');
 const fastifyStatic = require('@fastify/static');
 const dotenv = require('dotenv');
 const path = require('path');
+const crypto = require('crypto');
 const { query } = require('./db');
 const { exposeErrorDetails } = require('./debug');
 const { authRoutes } = require('./routes/auth');
@@ -63,6 +64,7 @@ async function ensureRevokedTokensTable() {
 
 async function ensureExtraTables() {
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS expo_push_token TEXT`);
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_renewal_notified_at TIMESTAMPTZ`);
   await query(`
     CREATE TABLE IF NOT EXISTS event_reminder_log (
       event_id      UUID        NOT NULL,
@@ -72,6 +74,13 @@ async function ensureExtraTables() {
       PRIMARY KEY (event_id, user_id, reminder_type)
     )
   `);
+  // Soft-delete support for wall posts (user-initiated deletions have 24h grace period)
+  await query(`ALTER TABLE wall ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  // Performance indexes
+  await query(`CREATE INDEX IF NOT EXISTS idx_user_likes_match ON user_likes (liked_id, liker_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_personal_conversations_bidir ON personal_conversations (user_initiator, user_receiver)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_wall_theme_created ON wall (theme_id, created_at)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_wall_soft_delete ON wall (deleted_at) WHERE deleted_at IS NOT NULL`);
 }
 
 async function start() {
@@ -130,11 +139,20 @@ async function start() {
   });
 
   // ── Vérification x-api-key sur toutes les routes /api/* ──
+  // Uses constant-time comparison to prevent timing-based brute-force attacks.
+  function timingSafeCompare(a, b) {
+    try {
+      return crypto.timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
+    } catch {
+      return false;
+    }
+  }
+
   app.addHook('onRequest', async (request, reply) => {
     if (request.url === '/api/health') return;
     if (!request.url.startsWith('/api/')) return;
     const key = request.headers['x-api-key'];
-    if (!key || key !== API_SECRET_KEY) {
+    if (!key || !timingSafeCompare(key, API_SECRET_KEY)) {
       return reply.status(401).send({ error: 'Invalid API key' });
     }
   });
@@ -144,14 +162,16 @@ async function start() {
     try {
       await request.jwtVerify();
       const jti = request.user?.jti;
-      if (jti) {
-        const revoked = await query(
-          'SELECT 1 FROM revoked_tokens WHERE jti = $1 AND expires_at > NOW()',
-          [jti]
-        );
-        if (revoked.rows.length > 0) {
-          return reply.status(401).send({ error: 'Token révoqué — reconnecte-toi' });
-        }
+      // Reject tokens that lack a jti (pre-revocation-system tokens or forged tokens)
+      if (!jti) {
+        return reply.status(401).send({ error: 'Token invalide — reconnecte-toi' });
+      }
+      const revoked = await query(
+        'SELECT 1 FROM revoked_tokens WHERE jti = $1 AND expires_at > NOW()',
+        [jti]
+      );
+      if (revoked.rows.length > 0) {
+        return reply.status(401).send({ error: 'Token révoqué — reconnecte-toi' });
       }
     } catch (err) {
       return reply.status(401).send({ error: 'Unauthorized' });
@@ -195,9 +215,12 @@ async function start() {
     return reply.status(dbStatus === 'connected' ? 200 : 503).send(health);
   });
 
-  // ── Nettoyage périodique des tokens révoqués expirés ──
+  // ── Nettoyage périodique des tokens révoqués expirés + posts wall soft-supprimés ──
   setInterval(async () => {
     try { await query('DELETE FROM revoked_tokens WHERE expires_at < NOW()'); } catch { /* silence */ }
+    try {
+      await query(`DELETE FROM wall WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '24 hours'`);
+    } catch { /* silence */ }
   }, 60 * 60 * 1000);
 
   startScheduler();

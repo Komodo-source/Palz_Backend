@@ -98,7 +98,7 @@ async function swipeRoutes(app) {
   app.get('/matches', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      const limit = Math.min(parseInt(request.query.limit, 10) || 50, 200);
+      const limit = Math.max(1, Math.min(parseInt(request.query.limit, 10) || 50, 200));
       const offset = Math.max(parseInt(request.query.offset, 10) || 0, 0);
 
       const result = await query(
@@ -130,7 +130,7 @@ async function swipeRoutes(app) {
   app.get('/likes', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-      const limit = Math.min(parseInt(request.query.limit, 10) || 50, 200);
+      const limit = Math.max(1, Math.min(parseInt(request.query.limit, 10) || 50, 200));
       const offset = Math.max(parseInt(request.query.offset, 10) || 0, 0);
 
       const result = await query(
@@ -151,6 +151,45 @@ async function swipeRoutes(app) {
       return reply.send({ likes: result.rows, has_more: result.rows.length === limit });
     } catch (err) {
       console.error('Likes error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── GET blocked users list ──
+  app.get('/blocked', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const result = await query(
+        `SELECT u.id, u.full_name, u.user_name, u.profile_image, bu.created_at AS blocked_at
+         FROM blocked_users bu
+         JOIN users u ON u.id = bu.blocked_id
+         WHERE bu.blocker_id = $1
+         ORDER BY bu.created_at DESC`,
+        [userId]
+      );
+      return reply.send({ blocked: result.rows });
+    } catch (err) {
+      console.error('Get blocked error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+  // ── Unblock ──
+  app.delete('/block/:id', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const parseResult = uuidSchema.safeParse(request.params.id);
+      if (!parseResult.success) {
+        return reply.status(400).send({ error: 'Invalid user id' });
+      }
+      const unblockedId = parseResult.data;
+      await query(
+        'DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2',
+        [userId, unblockedId]
+      );
+      return reply.send({ unblocked: true });
+    } catch (err) {
+      console.error('Unblock error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });

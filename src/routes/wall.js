@@ -100,12 +100,13 @@ async function wallRoutes(app) {
       const cutoff = new Date(Date.now() - THREE_DAYS_MS).toISOString();
 
       // Delete posts from old themes OR posts older than 3 days, and clean up their storage files
+      // (excludes soft-deleted posts which are cleaned up separately after 24h grace period)
       const expired = await query(
-        'SELECT wall_photo FROM wall WHERE theme_id != $1 OR created_at < $2',
+        'SELECT wall_photo FROM wall WHERE (theme_id != $1 OR created_at < $2) AND deleted_at IS NULL',
         [theme.id, cutoff]
       );
       await query(
-        'DELETE FROM wall WHERE theme_id != $1 OR created_at < $2',
+        'DELETE FROM wall WHERE (theme_id != $1 OR created_at < $2) AND deleted_at IS NULL',
         [theme.id, cutoff]
       );
 
@@ -139,6 +140,7 @@ async function wallRoutes(app) {
            LEFT JOIN wall_reactions wr ON wr.post_id = w.id
            WHERE w.theme_id = $1
              AND w.created_at >= $2
+             AND w.deleted_at IS NULL
            GROUP BY w.id, u.full_name, u.user_name, u.profile_image
            ORDER BY w.created_at DESC
            LIMIT 50`,
@@ -155,6 +157,7 @@ async function wallRoutes(app) {
            JOIN users u ON u.id = w.user_initiator
            WHERE w.theme_id = $1
              AND w.created_at >= $2
+             AND w.deleted_at IS NULL
            ORDER BY w.created_at DESC
            LIMIT 50`,
           [theme.id, cutoff]
@@ -216,25 +219,9 @@ async function wallRoutes(app) {
         return reply.status(403).send({ error: 'Not authorized to delete this post' });
       }
 
-      // Delete from DB first
-      await query('DELETE FROM wall WHERE id = $1', [id]);
-
-      // Clean up Supabase Storage files (fire-and-forget — don't block the response)
-      try {
-        const photos = Array.isArray(post.rows[0].wall_photo) ? post.rows[0].wall_photo : JSON.parse(post.rows[0].wall_photo || '[]');
-        const filenames = photos
-          .map((url) => {
-            const match = String(url).match(/user_photos\/(.+)$/);
-            return match ? match[1] : null;
-          })
-          .filter(Boolean);
-
-        if (filenames.length > 0) {
-          await supabase.storage.from('user_photos').remove(filenames);
-        }
-      } catch (storageErr) {
-        console.error('Wall storage cleanup error (non-fatal):', storageErr);
-      }
+      // Soft-delete: mark deleted_at so the post disappears from feeds immediately
+      // but the row (and its storage files) are kept for 24 hours before permanent deletion.
+      await query('UPDATE wall SET deleted_at = NOW() WHERE id = $1', [id]);
 
       return reply.send({ deleted: true });
     } catch (err) {

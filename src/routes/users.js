@@ -378,6 +378,9 @@ async function userRoutes(app) {
           [userId]
         );
         user = result.rows[0];
+        if (!user) {
+          return reply.status(404).send({ error: 'User not found' });
+        }
       }
 
       return reply.send({ user });

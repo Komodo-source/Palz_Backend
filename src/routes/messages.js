@@ -4,11 +4,19 @@ const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { sendPush, getTokensForUsers } = require('../services/push');
 
+// Only allow media hosted on our own Supabase instance
+const ALLOWED_MEDIA_DOMAIN = process.env.SUPABASE_URL || null;
+
 const sendMessageSchema = z.object({
   conversation_id: z.string().uuid(),
   content: z.string().max(5000).default(''),
-  message_type: z.string().default('text').optional(),
-  media_url: z.string().url().nullable().optional(),
+  message_type: z.enum(['text', 'image', 'voice']).default('text').optional(),
+  media_url: z.string().url()
+    .refine(
+      (url) => !ALLOWED_MEDIA_DOMAIN || url.startsWith(ALLOWED_MEDIA_DOMAIN),
+      { message: 'media_url must point to app storage only' }
+    )
+    .nullable().optional(),
   reply_to_message: z.string().uuid().nullable().optional(),
 }).refine(
   (data) => data.content.trim().length > 0 || (data.media_url && data.media_url.length > 0),
@@ -259,8 +267,18 @@ async function messageRoutes(app) {
 
   app.post('/update_streak', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
+      const userId = getUserId(request);
       const body = streakSchema.parse(request.body);
       const conversation_id = body.conversationId;
+
+      // Verify the caller is a participant of this conversation
+      const authCheck = await query(
+        'SELECT id FROM personal_conversations WHERE id = $1 AND (user_initiator = $2 OR user_receiver = $2)',
+        [conversation_id, userId]
+      );
+      if (authCheck.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not authorized for this conversation' });
+      }
 
       const result = await query(
         `SELECT streak, streak_last_date FROM personal_conversations WHERE id = $1`,
@@ -296,6 +314,21 @@ async function messageRoutes(app) {
         [newStreak, conversation_id]
       );
 
+      // Notify user when a streak they had is broken
+      if (newStreak === 1 && row.streak > 1) {
+        query('SELECT expo_push_token FROM users WHERE id = $1', [userId]).then((r) => {
+          const token = r.rows[0]?.expo_push_token;
+          if (token) {
+            sendPush(
+              [token],
+              '💔 Streak perdu',
+              `Votre série de ${row.streak} jours vient de s'interrompre. Envoyez un message pour recommencer !`,
+              { type: 'streak_broken' }
+            );
+          }
+        }).catch((err) => console.error('[push] streak broken notification error:', err.message));
+      }
+
       return reply.send({ streak: newStreak });
     } catch (err) {
       console.error('Update streak error:', err);
@@ -322,6 +355,15 @@ async function messageRoutes(app) {
         [conversationId, userId]
       );
 
+      // Cursor-based pagination: pass ?before_id=<message_uuid> to load older messages
+      const beforeId = request.query.before_id || null;
+      const params = [conversationId];
+      let cursorClause = '';
+      if (beforeId) {
+        params.push(beforeId);
+        cursorClause = `AND m.created_at < (SELECT created_at FROM messages WHERE id = $2)`;
+      }
+
       const result = await query(
         `SELECT m.id, m.sender_id, m.conversation_id, m.content, m.message_type,
                 m.media_url, m.is_seen, m.reply_to_message, m.created_at,
@@ -329,13 +371,14 @@ async function messageRoutes(app) {
                 u.profile_image AS sender_image
          FROM messages m
          JOIN users u ON u.id = m.sender_id
-         WHERE m.conversation_id = $1
-         ORDER BY m.created_at ASC
+         WHERE m.conversation_id = $1 ${cursorClause}
+         ORDER BY m.created_at DESC
          LIMIT 50`,
-        [conversationId]
+        params
       );
 
-      return reply.send({ messages: result.rows });
+      // Return oldest-first for the UI; has_more tells the frontend there are older messages
+      return reply.send({ messages: result.rows.reverse(), has_more: result.rows.length === 50 });
     } catch (err) {
       console.error('Messages error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
@@ -429,7 +472,7 @@ async function messageRoutes(app) {
           );
           if (countResult.rows[0].count >= FREE_USER_MSG_LIMIT) {
             return reply.status(403).send({
-              error: `Les utilisateurs gratuits peuvent envoyer ${FREE_USER_MSG_LIMIT} messages avant un match. Passe Premium pour envoyer plus.`,
+              error: `Tu as atteint la limite de ${FREE_USER_MSG_LIMIT} messages avant un match. Passe à Premium pour envoyer plus.`,
               limit_reached: true,
             });
           }
@@ -466,7 +509,7 @@ async function messageRoutes(app) {
         const tokens = await getTokensForUsers([recipientId], query);
         const preview = body.content?.trim() || '📷';
         sendPush(tokens, name, preview, { type: 'message', conversation_id: body.conversation_id });
-      }).catch(() => {});
+      }).catch((err) => console.error('[push] message notification error:', err.message));
 
       return reply.status(201).send({ message: result.rows[0] });
     } catch (err) {

@@ -125,7 +125,7 @@ async function authRoutes(app) {
       }
 
       const { token, jti } = signToken(app, user.id, user.email);
-      query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch(() => {});
+      query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch((err) => console.error('[auth] login_events insert error:', err.message));
 
       return reply.send({ user, token, isNewUser });
     } catch (err) {
@@ -207,7 +207,7 @@ async function authRoutes(app) {
       delete user.password;
       const { token } = signToken(app, user.id, user.email);
 
-      query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch(() => {});
+      query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch((err) => console.error('[auth] login_events insert error:', err.message));
 
       return reply.send({ user, token });
     } catch (err) {

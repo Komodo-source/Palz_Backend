@@ -128,7 +128,7 @@ async function runWeeklyGroupGeneration() {
         const memberIds = members.map((m) => m.id);
         getTokensForUsers(memberIds, query).then((tokens) => {
           sendPush(tokens, '🎉 Ton groupe de la semaine est prêt !', `Tu as été mise en groupe autour de "${commonInterest}". Va dire bonjour !`, { type: 'group_formed' });
-        }).catch(() => {});
+        }).catch((err) => console.error('[scheduler][push] group_formed notification error:', err.message));
 
         for (const m of members) matchedIds.add(m.id);
         groupsCreated++;
@@ -172,7 +172,7 @@ async function runEventReminderCheck() {
         query(
           `INSERT INTO event_reminder_log (event_id, user_id, reminder_type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
           [row.id, row.user_id, type]
-        ).catch(() => {});
+        ).catch((err) => console.error('[scheduler] event_reminder_log insert error:', err.message));
       }
     }
   } catch (err) {
@@ -195,6 +195,46 @@ async function runWallThemeCheck(lastIndexRef) {
   }
 }
 
+async function runPremiumExpiryReminder() {
+  try {
+    // Find premium users whose subscription expires in [4d12h, 5d12h] — exactly a 24-hour
+    // window so the daily cron fires this exactly once per expiration cycle.
+    // premium_renewal_notified_at guard prevents a duplicate if the cron ever fires twice.
+    const { rows } = await query(
+      `SELECT id, expo_push_token, full_name
+       FROM users
+       WHERE is_premium = true
+         AND expo_push_token IS NOT NULL
+         AND premium_expires_at BETWEEN NOW() + INTERVAL '4 days 12 hours'
+                                    AND NOW() + INTERVAL '5 days 12 hours'
+         AND (
+           premium_renewal_notified_at IS NULL
+           OR premium_renewal_notified_at < NOW() - INTERVAL '20 days'
+         )`
+    );
+
+    if (rows.length === 0) return;
+
+    const tokens = rows.map((r) => r.expo_push_token);
+    await sendPush(
+      tokens,
+      '⭐ Ton abonnement expire bientôt',
+      'Il te reste 5 jours. Renouvelle ton abonnement pour continuer à profiter de Palz Premium.',
+      { type: 'premium_expiring' }
+    );
+
+    const ids = rows.map((r) => r.id);
+    await query(
+      `UPDATE users SET premium_renewal_notified_at = NOW() WHERE id = ANY($1::uuid[])`,
+      [ids]
+    );
+
+    console.log(`[scheduler] Premium expiry reminder sent to ${rows.length} user(s)`);
+  } catch (err) {
+    console.error('[scheduler] Premium expiry reminder error:', err);
+  }
+}
+
 function startScheduler() {
   // Every Monday at 08:00, Europe/Paris timezone
   cron.schedule('0 8 * * 1', () => {
@@ -214,9 +254,17 @@ function startScheduler() {
     runWallThemeCheck(lastWallThemeIndex);
   });
 
+  // Every day at 10:00: notify premium users expiring in 5 days
+  cron.schedule('0 10 * * *', () => {
+    runPremiumExpiryReminder().catch((err) =>
+      console.error('[scheduler] Unhandled premium reminder error:', err)
+    );
+  }, { timezone: 'Europe/Paris' });
+
   console.log('[scheduler] Weekly group scheduler active — runs every Monday 08:00 Europe/Paris');
   console.log('[scheduler] Event reminder cron active — runs every 5 minutes');
   console.log('[scheduler] Wall theme cron active — runs every hour');
+  console.log('[scheduler] Premium expiry reminder cron active — runs every day 10:00 Europe/Paris');
 }
 
 module.exports = { startScheduler, runWeeklyGroupGeneration };

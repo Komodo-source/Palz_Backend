@@ -5,6 +5,25 @@ const { query } = require('../db');
 const { exposeErrorDetails } = require('../debug');
 const { checkImageSafety, checkImageNSFW } = require('../content_filtering');
 
+// Serialised NSFW queue — at most one TensorFlow inference runs at a time.
+// This prevents heap exhaustion when multiple uploads arrive concurrently.
+let _nsfwQueue = Promise.resolve();
+
+function scheduleNsfwCheck(buffer, filename, bucket) {
+  _nsfwQueue = _nsfwQueue
+    .then(async () => {
+      const result = await checkImageNSFW(buffer);
+      if (!result.safe) {
+        console.warn(`[NSFW] Removing ${filename} — ${result.prediction?.className}`);
+        await supabase.storage.from(bucket).remove([filename]);
+      }
+    })
+    .catch((err) => {
+      // Never let a failed check break the queue for the next upload
+      console.error('[NSFW] Background check error:', err.message);
+    });
+}
+
 function sanitizeName(name) {
   return name
     .toLowerCase()
@@ -63,14 +82,10 @@ async function uploadRoutes(app) {
       }
       const rawBuffer = Buffer.concat(chunks);
 
-      // Vérification de sécurité du contenu (magic bytes + NSFW)
+      // Synchronous check: magic bytes only (fast, no memory spike)
       const safety = await checkImageSafety(rawBuffer, data.mimetype);
       if (!safety.safe) {
         return reply.status(400).send({ error: `Contenu refusé : ${safety.reason}` });
-      }
-      const NSFW_image = await checkImageNSFW(rawBuffer);
-      if (!NSFW_image.safe) {
-        return reply.status(400).send({ nsfw: true });
       }
 
       // Compress with Sharp (auto-rotates EXIF, resizes, converts to JPEG)
@@ -90,6 +105,10 @@ async function uploadRoutes(app) {
       const { data: publicUrlData } = supabase.storage
         .from('user_photos')
         .getPublicUrl(filename);
+
+      // NSFW check runs after the response is sent — prevents OOM from blocking inference.
+      // If explicit content is detected the file is deleted from storage immediately.
+      scheduleNsfwCheck(rawBuffer, filename, 'user_photos');
 
       return reply.send({ url: publicUrlData.publicUrl, filename });
     } catch (err) {

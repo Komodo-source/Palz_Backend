@@ -488,7 +488,7 @@ async function groupRoutes(app) {
       if (otherMemberIds.length > 0) {
         getTokensForUsers(otherMemberIds, query).then((tokens) => {
           sendPush(tokens, '🎉 Ton groupe de la semaine est prêt !', `Tu as été mise en groupe autour de "${commonInterest}". Va dire bonjour !`, { type: 'group_formed' });
-        }).catch(() => {});
+        }).catch((err) => console.error('[push] group_formed notification error:', err.message));
       }
 
       return reply.status(201).send({
@@ -737,7 +737,7 @@ async function groupRoutes(app) {
         const tokens = await getTokensForUsers(memberIds, query);
         const preview = body.content?.trim() || '📷';
         sendPush(tokens, groupTitle, `${senderName}: ${preview}`, { type: 'group_message', weekly_group_id: body.weekly_group_id });
-      }).catch(() => {});
+      }).catch((err) => console.error('[push] group_message notification error:', err.message));
 
       return reply.status(201).send({ message: result.rows[0] });
     } catch (err) {
@@ -884,7 +884,7 @@ async function groupRoutes(app) {
           : null;
         const bodyMsg = timeLabel ? `📍 ${location} à ${timeLabel}` : `📍 ${location}`;
         sendPush(tokens, `${groupTitle} — Rendez-vous proposé !`, bodyMsg, { type: 'rendezvous', weekly_group_id });
-      }).catch(() => {});
+      }).catch((err) => console.error('[push] rendezvous notification error:', err.message));
 
       return reply.send({ updated: true });
     } catch (err) {
@@ -945,7 +945,7 @@ async function groupRoutes(app) {
         const memberIds = membersRes.rows.map((r) => r.user_id).filter((id) => id !== userId);
         const tokens = await getTokensForUsers(memberIds, query);
         sendPush(tokens, `${groupTitle} — Nouvelle suggestion 📍`, `${userName} propose : ${location}`, { type: 'rendezvous', weekly_group_id });
-      }).catch(() => {});
+      }).catch((err) => console.error('[push] rendezvous-suggest notification error:', err.message));
 
       return reply.status(201).send({ suggestion: newSuggestion });
     } catch (err) {
