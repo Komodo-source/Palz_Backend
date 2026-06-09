@@ -19,6 +19,7 @@ const { groupRoutes } = require('./routes/groups');
 const { eventRoutes } = require('./routes/events');
 const { paymentRoutes } = require('./routes/payments');
 const { startScheduler } = require('./scheduler');
+const { ddosHook, strikeIp, getIp } = require('./middleware/ddos');
 
 dotenv.config();
 
@@ -77,6 +78,9 @@ async function start() {
   await ensureRevokedTokensTable();
   await ensureExtraTables();
 
+  // ── DDoS protection — registered first so banned IPs are rejected immediately ──
+  app.addHook('onRequest', ddosHook);
+
   // ── CORS — whitelist explicite ──
   await app.register(cors, {
     origin: (origin, cb) => {
@@ -97,9 +101,19 @@ async function start() {
   // ── Rate limiting global ──
   await app.register(rateLimit, {
     global: true,
-    max: 200,
+    max: 100,
     timeWindow: '1 minute',
-    errorResponseBuilder: () => ({ error: 'Trop de requêtes — réessaie dans un moment.' }),
+    // Each rate-limit violation counts as a strike in the DDoS ban system
+    onExceeded: (request) => strikeIp(getIp(request)),
+    keyGenerator: (request) => getIp(request),
+    errorResponseBuilder: (_request, context) => ({
+      error: 'Trop de requêtes — réessaie dans un moment.',
+      retry_after_seconds: Math.ceil(context.ttl / 1000),
+    }),
+    // Per-route overrides — set config.rateLimit on sensitive routes
+    // e.g. auth/login: { max: 10, timeWindow: '15 minutes' }
+    //      auth/signup: { max: 5,  timeWindow: '1 hour' }
+    //      upload/*:    { max: 10, timeWindow: '1 minute' }
   });
 
   await app.register(jwt, { secret: JWT_SECRET });

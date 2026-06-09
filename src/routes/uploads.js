@@ -42,7 +42,7 @@ async function compressImage(buffer) {
 
 async function uploadRoutes(app) {
   // Upload profile/chat image → Supabase "user_photos" bucket
-  app.post('/image', { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post('/image', { preHandler: [app.authenticate], config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     try {
       const userId = getUserId(request);
       const data = await request.file();
@@ -102,7 +102,7 @@ async function uploadRoutes(app) {
   });
 
   // Upload audio fun fact → Supabase "audio_users" bucket
-  app.post('/audio', { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post('/audio', { preHandler: [app.authenticate], config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
     try {
       const userId = getUserId(request);
       const data = await request.file();
@@ -164,7 +164,7 @@ async function uploadRoutes(app) {
     }
   });
   // Upload video verification → Supabase "video_verifications" bucket
-  app.post('/video-verification', { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post('/video-verification', { preHandler: [app.authenticate], config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
     try {
       const userId = getUserId(request);
 
