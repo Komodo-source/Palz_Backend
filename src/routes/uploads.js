@@ -106,9 +106,11 @@ async function uploadRoutes(app) {
         .from('user_photos')
         .getPublicUrl(filename);
 
-      // NSFW check runs after the response is sent — prevents OOM from blocking inference.
-      // If explicit content is detected the file is deleted from storage immediately.
-      scheduleNsfwCheck(rawBuffer, filename, 'user_photos');
+      // NSFW check temporarily disabled.
+      // The pure-JS @tensorflow/tfjs backend runs model load + inference on the main
+      // thread, which blocks the event loop on a single-vCPU host and starves the
+      // immediately-following request (e.g. wall createPost), causing client timeouts.
+      // scheduleNsfwCheck(rawBuffer, filename, 'user_photos');
 
       return reply.send({ url: publicUrlData.publicUrl, filename });
     } catch (err) {
