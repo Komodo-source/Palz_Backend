@@ -7,6 +7,11 @@ const { sendPush, getTokensForUsers } = require('../services/push');
 // Only allow media hosted on our own Supabase instance
 const ALLOWED_MEDIA_DOMAIN = process.env.SUPABASE_URL || null;
 
+// A streak survives up to this many days of silence. Once the last active day
+// is older than this window, the flame counter resets (to 0 on read, to 1 on
+// the next message).
+const STREAK_GRACE_DAYS = 2;
+
 const sendMessageSchema = z.object({
   conversation_id: z.string().uuid(),
   content: z.string().max(5000).default(''),
@@ -31,6 +36,12 @@ const IceBreakerSchema = z.object({
 
 const streakSchema = z.object({
   conversationId: z.string().uuid(),
+});
+
+const reactionSchema = z.object({
+  messageId: z.string().uuid(),
+  // A single emoji/grapheme. Cap the length so it can't be abused as a text field.
+  emoji: z.string().min(1).max(16),
 });
 
 
@@ -219,7 +230,12 @@ async function messageRoutes(app) {
 
       const result = await query(
         `SELECT
-           pc.id, pc.streak,
+           pc.id,
+           -- Flame resets after STREAK_GRACE_DAYS of silence, even with no new message
+           CASE
+             WHEN pc.streak_last_date >= CURRENT_DATE - INTERVAL '${STREAK_GRACE_DAYS} days'
+             THEN pc.streak ELSE 0
+           END AS streak,
            CASE
              WHEN pc.user_initiator = $1 THEN u2.id
              ELSE u1.id
@@ -303,8 +319,11 @@ async function messageRoutes(app) {
       if (!lastDate) {
         newStreak = 1;
       } else {
-        const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-        newStreak = lastDate === yesterday ? row.streak + 1 : 1;
+        const todayStr = new Date(today).toISOString().split('T')[0];
+        const daysSince = Math.round((Date.parse(todayStr) - Date.parse(lastDate)) / 86400000);
+        // Keep the streak alive through up to STREAK_GRACE_DAYS of silence;
+        // only reset once the gap exceeds the grace window.
+        newStreak = daysSince <= STREAK_GRACE_DAYS ? row.streak + 1 : 1;
       }
 
       await query(
@@ -332,6 +351,61 @@ async function messageRoutes(app) {
       return reply.send({ streak: newStreak });
     } catch (err) {
       console.error('Update streak error:', err);
+      return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
+    }
+  });
+
+
+  // Toggle an emoji reaction on a message. Reacting with a new emoji replaces the
+  // previous one; reacting with the same emoji again removes it.
+  app.post('/react', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { messageId, emoji } = reactionSchema.parse(request.body);
+
+      // Ensure the message exists and the caller is a participant of its conversation
+      const access = await query(
+        `SELECT m.id
+           FROM messages m
+           JOIN personal_conversations pc ON pc.id = m.conversation_id
+          WHERE m.id = $1 AND (pc.user_initiator = $2 OR pc.user_receiver = $2)`,
+        [messageId, userId]
+      );
+      if (access.rows.length === 0) {
+        return reply.status(403).send({ error: 'Not authorized for this message' });
+      }
+
+      // If the same emoji is already set by this user, toggle it off
+      const existing = await query(
+        'SELECT emoji FROM message_reactions WHERE message_id = $1 AND user_id = $2',
+        [messageId, userId]
+      );
+
+      let reacted;
+      if (existing.rows[0]?.emoji === emoji) {
+        await query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2', [messageId, userId]);
+        reacted = false;
+      } else {
+        await query(
+          `INSERT INTO message_reactions (message_id, user_id, emoji)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = NOW()`,
+          [messageId, userId, emoji]
+        );
+        reacted = true;
+      }
+
+      const reactions = await query(
+        `SELECT user_id, emoji FROM message_reactions WHERE message_id = $1 ORDER BY created_at`,
+        [messageId]
+      );
+
+      return reply.send({ reacted, emoji, reactions: reactions.rows });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.status(400).send({ error: 'Invalid reaction', details: err.errors });
+      }
+      console.error('React to message error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
   });
@@ -368,9 +442,20 @@ async function messageRoutes(app) {
         `SELECT m.id, m.sender_id, m.conversation_id, m.content, m.message_type,
                 m.media_url, m.is_seen, m.reply_to_message, m.created_at,
                 u.full_name AS sender_name, u.user_name AS sender_username,
-                u.profile_image AS sender_image
+                u.profile_image AS sender_image,
+                rm.content      AS reply_content,
+                rm.message_type AS reply_type,
+                rm.sender_id    AS reply_sender_id,
+                ru.full_name    AS reply_sender_name,
+                COALESCE(
+                  (SELECT json_agg(json_build_object('user_id', mr.user_id, 'emoji', mr.emoji) ORDER BY mr.created_at)
+                   FROM message_reactions mr WHERE mr.message_id = m.id),
+                  '[]'
+                ) AS reactions
          FROM messages m
          JOIN users u ON u.id = m.sender_id
+         LEFT JOIN messages rm ON rm.id = m.reply_to_message
+         LEFT JOIN users ru ON ru.id = rm.sender_id
          WHERE m.conversation_id = $1 ${cursorClause}
          ORDER BY m.created_at DESC
          LIMIT 50`,

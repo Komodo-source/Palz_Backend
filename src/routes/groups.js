@@ -196,7 +196,7 @@ function findGroupCommonInterest(members) {
     }
   }
 
-  if (labels.length === 0) return 'Centre d\'intérêt commun';
+  if (labels.length === 0) return 'Les pétillantes';
 
   // Return the most frequent label
   const freq = {};
@@ -718,11 +718,15 @@ async function groupRoutes(app) {
         return reply.status(403).send({ error: 'Not a member of this group' });
       }
 
+      // media_url is a jsonb column — the URL string must be JSON-encoded before
+      // insert (same as 1-on-1 messages). Inserting a bare URL throws
+      // "invalid input syntax for type json" and 500s the request.
+      const mediaUrlJson = body.media_url ? JSON.stringify(body.media_url) : null;
       const result = await query(
         `INSERT INTO group_messages (group_id, sender_id, content, message_type, media_url)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING id, group_id, sender_id, content, message_type, media_url, created_at`,
-        [body.weekly_group_id, userId, body.content || '', body.message_type || 'text', body.media_url || null]
+        [body.weekly_group_id, userId, body.content || '', body.message_type || 'text', mediaUrlJson]
       );
 
       // Notify other group members (fire-and-forget)

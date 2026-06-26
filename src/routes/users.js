@@ -179,7 +179,7 @@ async function userRoutes(app) {
       const body = reporterUserSchema.parse(request.body);
 
       await query(
-        `INSERT INTO reported_user(reporter_id, reported_user_id, reason) VALUES($1,$2,$3)`,
+        `INSERT INTO reported_users(reporter_id, reported_user_id, reason) VALUES($1,$2,$3)`,
         [reporterId, body.reportedUserID, body.reason]
       );
 

@@ -1,5 +1,6 @@
 const Fastify = require('fastify');
 const cors = require('@fastify/cors');
+const helmet = require('@fastify/helmet');
 const jwt = require('@fastify/jwt');
 const rateLimit = require('@fastify/rate-limit');
 const multipart = require('@fastify/multipart');
@@ -76,6 +77,8 @@ async function ensureExtraTables() {
   `);
   // Soft-delete support for wall posts (user-initiated deletions have 24h grace period)
   await query(`ALTER TABLE wall ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  // Reply-to support for 1-on-1 messages (quoting a previous message)
+  await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message UUID REFERENCES messages(id) ON DELETE SET NULL`);
   // Performance indexes
   await query(`CREATE INDEX IF NOT EXISTS idx_user_likes_match ON user_likes (liked_id, liker_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_personal_conversations_bidir ON personal_conversations (user_initiator, user_receiver)`);
@@ -89,6 +92,22 @@ async function start() {
 
   // ── DDoS protection — registered first so banned IPs are rejected immediately ──
   app.addHook('onRequest', ddosHook);
+
+  // ── Security headers (V-22, V-25, V-30) — X-Frame-Options, X-Content-Type-Options,
+  //    HSTS, Referrer-Policy, CSP. The API serves JSON + static uploads only, so a
+  //    restrictive CSP is safe.
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+        mediaSrc: ["'self'", 'https:'],
+        frameAncestors: ["'none'"],
+      },
+    },
+    hsts: { maxAge: 15552000, includeSubDomains: true },
+    crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow mobile app to load /uploads
+  });
 
   // ── CORS — whitelist explicite ──
   await app.register(cors, {
