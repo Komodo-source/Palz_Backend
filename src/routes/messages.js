@@ -3,6 +3,7 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { sendPush, getTokensForUsers } = require('../services/push');
+const { checkTextContent } = require('../content_filtering');
 
 // Only allow media hosted on our own Supabase instance
 const ALLOWED_MEDIA_DOMAIN = process.env.SUPABASE_URL || null;
@@ -281,6 +282,34 @@ async function messageRoutes(app) {
   });
 
 
+  // Delete a conversation and all its messages — only a participant may do this.
+  app.delete('/:conversationId', { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const userId = getUserId(request);
+      const { conversationId } = request.params;
+
+      const authCheck = await query(
+        'SELECT id FROM personal_conversations WHERE id = $1 AND (user_initiator = $2 OR user_receiver = $2)',
+        [conversationId, userId]
+      );
+      if (authCheck.rows.length === 0) {
+        return reply.status(404).send({ error: 'Conversation introuvable' });
+      }
+
+      await query(
+        'DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = $1)',
+        [conversationId]
+      );
+      await query('DELETE FROM messages WHERE conversation_id = $1', [conversationId]);
+      await query('DELETE FROM personal_conversations WHERE id = $1', [conversationId]);
+
+      return reply.send({ deleted: true });
+    } catch (err) {
+      console.error('Delete conversation error:', err);
+      return reply.status(500).send({ error: 'Internal server error' });
+    }
+  });
+
   app.post('/update_streak', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const userId = getUserId(request);
@@ -525,6 +554,11 @@ async function messageRoutes(app) {
     try {
       const userId = getUserId(request);
       const body = sendMessageSchema.parse(request.body);
+
+      const flagged = checkTextContent(body.content);
+      if (flagged) {
+        return reply.status(400).send({ error: 'Ce message contient du contenu interdit.', flagged: true });
+      }
 
       const convCheck = await query(
         'SELECT id, user_initiator, user_receiver FROM personal_conversations WHERE id = $1 AND (user_initiator = $2 OR user_receiver = $2)',

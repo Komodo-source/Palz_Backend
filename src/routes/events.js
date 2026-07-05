@@ -3,6 +3,7 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const {ACTIVITY_BASED_LABELS} = require("../activities");
+const { checkTextContent, moderateTextFields } = require('../content_filtering');
 const VALID_CATEGORIES = ['bar', 'bowling', 'cinema', 'restaurant', 'sport', 'cafe', 'plage', 'parc', 'autre'];
 
 const createEventSchema = z.object({
@@ -71,6 +72,15 @@ async function eventRoutes(app) {
     try {
       const userId = getUserId(request);
       const body = createEventSchema.parse(request.body);
+
+      const violation = moderateTextFields({
+        title: body.title,
+        description: body.description,
+        location_name: body.location_name,
+      });
+      if (violation) {
+        return reply.status(400).send({ error: 'Le contenu de l\'événement contient du texte interdit.', flagged: true });
+      }
 
       const startsAt = new Date(body.starts_at);
       const now = new Date();
@@ -418,6 +428,9 @@ async function eventRoutes(app) {
       }
       if (isVoice && !media_url) {
         return reply.status(400).send({ error: 'media_url is required for voice messages' });
+      }
+      if (!isVoice && checkTextContent(content)) {
+        return reply.status(400).send({ error: 'Ce message contient du contenu interdit.', flagged: true });
       }
 
       const memberCheck = await query(

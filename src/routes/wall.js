@@ -1,9 +1,20 @@
 const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
-const { supabase } = require('../supabase');
+const { checkTextContent } = require('../content_filtering');
 
 const FREE_USER_MESSAGE_LIMIT = 3;
+
+// Only allow media hosted on our own Supabase instance — same rule as chat
+// messages (routes/messages.js). Prevents arbitrary external URLs (tracking
+// pixels, shock images, phishing) from being injected into the shared feed.
+const ALLOWED_MEDIA_DOMAIN = process.env.SUPABASE_URL || null;
+
+function isOwnStorageUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  if (!ALLOWED_MEDIA_DOMAIN) return true; // dev without Supabase configured
+  return url.startsWith(ALLOWED_MEDIA_DOMAIN);
+}
 
 const WALL_THEMES = [
 'Ton endroit préféré 📍',
@@ -99,33 +110,9 @@ async function wallRoutes(app) {
 
       const cutoff = new Date(Date.now() - THREE_DAYS_MS).toISOString();
 
-      // Delete posts from old themes OR posts older than 3 days, and clean up their storage files
-      // (excludes soft-deleted posts which are cleaned up separately after 24h grace period)
-      const expired = await query(
-        'SELECT wall_photo FROM wall WHERE (theme_id != $1 OR created_at < $2) AND deleted_at IS NULL',
-        [theme.id, cutoff]
-      );
-      await query(
-        'DELETE FROM wall WHERE (theme_id != $1 OR created_at < $2) AND deleted_at IS NULL',
-        [theme.id, cutoff]
-      );
-
-      // Remove storage files for all expired posts (fire-and-forget)
-      if (expired.rows.length > 0) {
-        const filenames = [];
-        for (const row of expired.rows) {
-          const photos = Array.isArray(row.wall_photo) ? row.wall_photo : JSON.parse(row.wall_photo || '[]');
-          for (const url of photos) {
-            const match = String(url).match(/user_photos\/(.+)$/);
-            if (match) filenames.push(match[1]);
-          }
-        }
-        if (filenames.length > 0) {
-          supabase.storage.from('user_photos').remove(filenames).catch((err) =>
-            console.error('Wall auto-cleanup storage error (non-fatal):', err)
-          );
-        }
-      }
+      // NOTE: expired-post deletion + storage cleanup moved to the hourly
+      // scheduler job (see scheduler.js runWallCleanup). The read path only
+      // filters — no destructive work, no race between concurrent readers.
 
       let result;
       try {
@@ -181,6 +168,12 @@ async function wallRoutes(app) {
       const wallPhoto = body.wall_photo;
       if (!wallPhoto || !Array.isArray(wallPhoto) || wallPhoto.length === 0) {
         return reply.status(400).send({ error: 'wall_photo must be a non-empty array of image URLs' });
+      }
+      if (wallPhoto.length > 5) {
+        return reply.status(400).send({ error: 'wall_photo: maximum 5 photos per post' });
+      }
+      if (!wallPhoto.every(isOwnStorageUrl)) {
+        return reply.status(400).send({ error: 'wall_photo must point to app storage only' });
       }
       const theme = await getActiveTheme();
 
@@ -270,6 +263,9 @@ async function wallRoutes(app) {
       }
       if (content.length > 500) {
         return reply.status(400).send({ error: 'Message too long (max 500 chars)' });
+      }
+      if (checkTextContent(content)) {
+        return reply.status(400).send({ error: 'Ce message contient du contenu interdit.', flagged: true });
       }
 
       // Verify the post exists

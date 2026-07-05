@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { query, withTransaction } = require('./db');
+const { supabase } = require('./supabase');
 const { scoreCandidate, haversineKm } = require('./matching');
 const { findGroupCommonInterest } = require('./routes/groups');
 const { sendPush, getTokensForUsers } = require('./services/push');
@@ -235,6 +236,54 @@ async function runPremiumExpiryReminder() {
   }
 }
 
+// ── Wall cleanup (B5) ──────────────────────────────────────────────────────
+// Deletes posts from ended themes or older than 3 days, plus their storage
+// files. Previously ran inside GET /wall/posts on every read (destructive work
+// on a read path + races between concurrent readers) — now a single hourly job.
+async function runWallCleanup() {
+  try {
+    const expired = await query(
+      `SELECT w.wall_photo FROM wall w
+       LEFT JOIN wall_themes wt ON wt.id = w.theme_id
+       WHERE w.deleted_at IS NULL
+         AND (w.created_at < NOW() - INTERVAL '3 days' OR wt.ends_at < NOW())`
+    );
+    if (expired.rows.length === 0) return;
+
+    await query(
+      `DELETE FROM wall w
+       USING wall_themes wt
+       WHERE wt.id = w.theme_id
+         AND w.deleted_at IS NULL
+         AND (w.created_at < NOW() - INTERVAL '3 days' OR wt.ends_at < NOW())`
+    );
+    // Posts whose theme row is missing (theme_id NULL / orphaned)
+    await query(
+      `DELETE FROM wall
+       WHERE deleted_at IS NULL
+         AND created_at < NOW() - INTERVAL '3 days'`
+    );
+
+    const filenames = [];
+    for (const row of expired.rows) {
+      let photos = [];
+      try {
+        photos = Array.isArray(row.wall_photo) ? row.wall_photo : JSON.parse(row.wall_photo || '[]');
+      } catch { /* malformed json — skip */ }
+      for (const url of photos) {
+        const match = String(url).match(/user_photos\/(.+)$/);
+        if (match) filenames.push(match[1]);
+      }
+    }
+    if (filenames.length > 0) {
+      await supabase.storage.from('user_photos').remove(filenames);
+    }
+    console.log(`[scheduler] Wall cleanup — ${expired.rows.length} post(s) removed, ${filenames.length} file(s) deleted`);
+  } catch (err) {
+    console.error('[scheduler] Wall cleanup error:', err);
+  }
+}
+
 function startScheduler() {
   // Every Monday at 08:00, Europe/Paris timezone
   cron.schedule('0 8 * * 1', () => {
@@ -254,6 +303,13 @@ function startScheduler() {
     runWallThemeCheck(lastWallThemeIndex);
   });
 
+  // Every hour (offset :30): purge expired wall posts + their storage files
+  cron.schedule('30 * * * *', () => {
+    runWallCleanup();
+  });
+  // Also run once at boot so a long-idle instance catches up immediately
+  runWallCleanup();
+
   // Every day at 10:00: notify premium users expiring in 5 days
   cron.schedule('0 10 * * *', () => {
     runPremiumExpiryReminder().catch((err) =>
@@ -267,4 +323,4 @@ function startScheduler() {
   console.log('[scheduler] Premium expiry reminder cron active — runs every day 10:00 Europe/Paris');
 }
 
-module.exports = { startScheduler, runWeeklyGroupGeneration };
+module.exports = { startScheduler, runWeeklyGroupGeneration, runWallCleanup };

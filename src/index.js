@@ -79,6 +79,28 @@ async function ensureExtraTables() {
   await query(`ALTER TABLE wall ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
   // Reply-to support for 1-on-1 messages (quoting a previous message)
   await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message UUID REFERENCES messages(id) ON DELETE SET NULL`);
+  // Refresh tokens (S3) — mirrors supabase/migrations/20260705000001_refresh_tokens.sql
+  await query(`
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      token_hash TEXT        PRIMARY KEY,
+      user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (user_id)`);
+  // Report hardening (S8) — dedup pair index + moderation status column.
+  // Mirrors supabase/migrations/20260705000000_report_user_hardening.sql so the
+  // ON CONFLICT clause in /report_user works even before the migration is pushed.
+  await query(`
+    DELETE FROM reported_users a USING reported_users b
+    WHERE a.reporter_id = b.reporter_id
+      AND a.reported_user_id = b.reported_user_id
+      AND a.created_at > b.created_at
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_reported_users_unique_pair ON reported_users (reporter_id, reported_user_id)`);
+  await query(`ALTER TABLE reported_users ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'pending'`);
   // Performance indexes
   await query(`CREATE INDEX IF NOT EXISTS idx_user_likes_match ON user_likes (liked_id, liker_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_personal_conversations_bidir ON personal_conversations (user_initiator, user_receiver)`);
@@ -169,6 +191,9 @@ async function start() {
 
   app.addHook('onRequest', async (request, reply) => {
     if (request.url === '/api/health') return;
+    // Server-to-server webhook — RevenueCat can't send x-api-key; it authenticates
+    // with its own mandatory shared secret (see routes/payments.js).
+    if (request.url === '/api/payments/webhook') return;
     if (!request.url.startsWith('/api/')) return;
     const key = request.headers['x-api-key'];
     if (!key || !timingSafeCompare(key, API_SECRET_KEY)) {
@@ -237,6 +262,7 @@ async function start() {
   // ── Nettoyage périodique des tokens révoqués expirés + posts wall soft-supprimés ──
   setInterval(async () => {
     try { await query('DELETE FROM revoked_tokens WHERE expires_at < NOW()'); } catch { /* silence */ }
+    try { await query(`DELETE FROM refresh_tokens WHERE expires_at < NOW() OR revoked_at < NOW() - INTERVAL '7 days'`); } catch { /* silence */ }
     try {
       await query(`DELETE FROM wall WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '24 hours'`);
     } catch { /* silence */ }

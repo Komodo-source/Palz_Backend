@@ -3,11 +3,12 @@ const { query } = require('../db');
 const { getUserId } = require('../middleware/auth');
 const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm } = require('../matching');
+const { moderateTextFields } = require('../content_filtering');
 
 
 const reporterUserSchema = z.object({
   reportedUserID: z.string().uuid(),
-  reason: z.string().min(1),
+  reason: z.string().min(1).max(255),
 });
 
 const updateProfileSchema = z.object({
@@ -100,9 +101,10 @@ async function userRoutes(app) {
     try {
       const userId = getUserId(request);
 
-      // Fetch current user profile (for scoring)
+      // Fetch current user profile (for scoring) + their discovery filters (B1)
       const meResult = await query(
         `SELECT u.id, u.interests, u.astrology_sign_id, u.latitude, u.longitude,
+                u.age_min_filter, u.age_max_filter, u.search_radius,
                 a.name AS astrology_title
          FROM users u
          LEFT JOIN astrology_signs a ON a.id = u.astrology_sign_id
@@ -110,6 +112,42 @@ async function userRoutes(app) {
         [userId]
       );
       const me = meResult.rows[0];
+
+      // ── Apply the user's own filters in SQL (previously stored but ignored) ──
+      const filterParams = [userId];
+      let filterWhere = '';
+
+      const ageMin = Number.isInteger(me.age_min_filter) ? me.age_min_filter : null;
+      const ageMax = Number.isInteger(me.age_max_filter) ? me.age_max_filter : null;
+      if (ageMin !== null || ageMax !== null) {
+        // When an age filter is set, candidates without a date of birth are excluded
+        filterWhere += ` AND u.date_of_birth IS NOT NULL`;
+        if (ageMin !== null) {
+          filterParams.push(ageMin);
+          filterWhere += ` AND EXTRACT(YEAR FROM AGE(u.date_of_birth)) >= $${filterParams.length}`;
+        }
+        if (ageMax !== null) {
+          filterParams.push(ageMax);
+          filterWhere += ` AND EXTRACT(YEAR FROM AGE(u.date_of_birth)) <= $${filterParams.length}`;
+        }
+      }
+
+      // Geographic radius — cheap bounding box in SQL, precise Haversine cut below.
+      // 1° of latitude ≈ 111.32 km; longitude degrees shrink with cos(latitude).
+      const myLat = parseFloat(me.latitude);
+      const myLon = parseFloat(me.longitude);
+      const radiusKm = Number.isInteger(me.search_radius) ? me.search_radius : null;
+      const hasGeoFilter = radiusKm !== null && Number.isFinite(myLat) && Number.isFinite(myLon);
+      if (hasGeoFilter) {
+        const latDelta = radiusKm / 111.32;
+        const lonDelta = radiusKm / (111.32 * Math.max(Math.cos((myLat * Math.PI) / 180), 0.01));
+        filterParams.push(myLat - latDelta, myLat + latDelta, myLon - lonDelta, myLon + lonDelta);
+        filterWhere += ` AND u.latitude IS NOT NULL AND u.longitude IS NOT NULL
+                         AND u.latitude  BETWEEN $${filterParams.length - 3} AND $${filterParams.length - 2}
+                         AND u.longitude BETWEEN $${filterParams.length - 1} AND $${filterParams.length}`;
+      }
+      // NOTE: girls_filter / events_filter / ready_to_go are integer flags whose
+      // product semantics aren't defined yet — intentionally not applied here.
 
       // Fetch candidate pool (unviewed, unliked, not blocked)s.
       const candidatesResult = await query(
@@ -142,17 +180,28 @@ async function userRoutes(app) {
                 AND u.id NOT IN (
                   SELECT blocker_id FROM blocked_users WHERE blocked_id = $1
                 )
+                ${filterWhere}
               GROUP BY u.id, u.user_name, u.date_of_birth, u.profile_image,
                       u.bio, u.work, u.situation, u.location, u.interests,
                       u.latitude, u.longitude,
                       a.name,
                       u.is_premium, u.created_at,
                       u.labels, u.reliability_score
-              LIMIT 50`,
-        [userId]
+              LIMIT 100`,
+        filterParams
       );
 
-      const candidates = candidatesResult.rows;
+      let candidates = candidatesResult.rows;
+
+      // Precise radius cut — the SQL bounding box is square, Haversine is exact
+      if (hasGeoFilter) {
+        candidates = candidates.filter((c) => {
+          const lat = parseFloat(c.latitude);
+          const lon = parseFloat(c.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+          return haversineKm(myLat, myLon, lat, lon) <= radiusKm;
+        });
+      }
 
       // Score every candidate against the current user
       const scored = candidates.map((c) => ({
@@ -178,13 +227,29 @@ async function userRoutes(app) {
       const reporterId = getUserId(request);
       const body = reporterUserSchema.parse(request.body);
 
+      if (body.reportedUserID === reporterId) {
+        return reply.status(400).send({ error: 'Tu ne peux pas te signaler toi-même.' });
+      }
+
+      const targetExists = await query('SELECT 1 FROM users WHERE id = $1', [body.reportedUserID]);
+      if (targetExists.rows.length === 0) {
+        return reply.status(404).send({ error: 'User not found' });
+      }
+
+      // One report per (reporter, target) pair — repeat reports are acknowledged
+      // but not duplicated (requires idx_reported_users_unique_pair migration).
       await query(
-        `INSERT INTO reported_users(reporter_id, reported_user_id, reason) VALUES($1,$2,$3)`,
+        `INSERT INTO reported_users(reporter_id, reported_user_id, reason)
+         VALUES($1,$2,$3)
+         ON CONFLICT (reporter_id, reported_user_id) DO NOTHING`,
         [reporterId, body.reportedUserID, body.reason]
       );
 
       return reply.send({ report_status: true });
     } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.status(400).send({ error: 'Validation failed', details: err.errors });
+      }
       console.error('Report user error:', err);
       return reply.status(500).send({ error: 'Internal server error', details: exposeErrorDetails(request) ? err.message : undefined });
     }
@@ -294,6 +359,22 @@ async function userRoutes(app) {
     try {
       const userId = getUserId(request);
       const body = updateProfileSchema.parse(request.body);
+
+      // Moderate free-text profile fields before they reach the database
+      const violation = moderateTextFields({
+        bio: body.bio,
+        work: body.work,
+        situation: body.situation,
+        prompt_question: body.prompt_question,
+        prompt_answer: body.prompt_answer,
+      });
+      if (violation) {
+        return reply.status(400).send({
+          error: 'Ce profil contient du texte interdit.',
+          field: violation.field,
+          flagged: true,
+        });
+      }
 
       // Pull out junction-table fields — they are not columns on the users table
       const { sports, hobbies, ...userFields } = body;

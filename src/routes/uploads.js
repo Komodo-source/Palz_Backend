@@ -24,14 +24,6 @@ function scheduleNsfwCheck(buffer, filename, bucket) {
     });
 }
 
-function sanitizeName(name) {
-  return name
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_]/g, '')
-    .substring(0, 50) || 'user';
-}
-
 let sharp;
 try {
   sharp = require('sharp');
@@ -184,17 +176,13 @@ async function uploadRoutes(app) {
       });
     }
   });
-  // Upload video verification → Supabase "video_verifications" bucket
+  // Upload video verification → PRIVATE Supabase "video_verifications" bucket.
+  // Verification videos are sensitive (biometric) data: the bucket must never be
+  // public, filenames must not embed personal data, and access goes through
+  // short-lived signed URLs generated with the service-role key (admin review).
   app.post('/video-verification', { preHandler: [app.authenticate], config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
     try {
       const userId = getUserId(request);
-
-      // Fetch the user's full_name to embed in the filename
-      const userResult = await query('SELECT full_name FROM users WHERE id = $1', [userId]);
-      if (userResult.rows.length === 0) {
-        return reply.status(404).send({ error: 'User not found' });
-      }
-      const fullName = userResult.rows[0].full_name || 'user';
 
       // Allow up to 200 MB for a verification video
       const data = await request.file({ limits: { fileSize: 200 * 1024 * 1024 } });
@@ -214,14 +202,23 @@ async function uploadRoutes(app) {
       }
 
       const ext = path.extname(data.filename) || '.mp4';
-      const safeName = sanitizeName(fullName);
-      const filename = `verification_${safeName}_${userId}_${Date.now()}${ext}`;
+      // No personal data in the filename — userId only (admin resolves the name in DB)
+      const filename = `verification_${userId}_${Date.now()}${ext}`;
 
       const chunks = [];
       for await (const chunk of data.file) {
         chunks.push(chunk);
       }
       const buffer = Buffer.concat(chunks);
+
+      // Best-effort: make sure the bucket exists AND is private. updateBucket
+      // also flips a legacy public bucket to private.
+      try {
+        await supabase.storage.createBucket('video_verifications', { public: false });
+      } catch { /* already exists */ }
+      try {
+        await supabase.storage.updateBucket('video_verifications', { public: false });
+      } catch { /* best effort */ }
 
       const { error: uploadError } = await supabase.storage
         .from('video_verifications')
@@ -235,21 +232,24 @@ async function uploadRoutes(app) {
         return reply.status(500).send({ error: 'Upload failed', details: uploadError.message });
       }
 
-      const { data: publicUrlData } = supabase.storage
-        .from('video_verifications')
-        .getPublicUrl(filename);
-
-      const videoUrl = publicUrlData.publicUrl;
-
-      // Persist URL and set status to pending admin review
+      // Persist the storage PATH (not a public URL) and set status to pending review
       await query(
         `UPDATE users
          SET video_verification_url = $1, video_verification_status = 'pending', updated_at = NOW()
          WHERE id = $2`,
-        [videoUrl, userId]
+        [filename, userId]
       );
 
-      return reply.send({ url: videoUrl, filename, status: 'pending' });
+      // Short-lived signed URL so the client can confirm the upload if needed
+      let signedUrl = null;
+      try {
+        const { data: signed } = await supabase.storage
+          .from('video_verifications')
+          .createSignedUrl(filename, 60 * 10); // 10 minutes
+        signedUrl = signed?.signedUrl ?? null;
+      } catch { /* non-fatal */ }
+
+      return reply.send({ url: signedUrl, filename, status: 'pending' });
     } catch (err) {
       console.error('Video verification upload error:', err);
       return reply.status(500).send({

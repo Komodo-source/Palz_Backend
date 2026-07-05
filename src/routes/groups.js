@@ -5,6 +5,7 @@ const { exposeErrorDetails } = require('../debug');
 const { scoreCandidate, haversineKm, parseInterests, get_weather } = require('../matching');
 const {ACTIVITY_BASED_LABELS} = require("../activities");
 const { sendPush, getTokensForUsers } = require('../services/push');
+const { checkTextContent } = require('../content_filtering');
 
 const createGroupMessageSchema = z.object({
   weekly_group_id: z.string().uuid(),
@@ -705,6 +706,10 @@ async function groupRoutes(app) {
     try {
       const userId = getUserId(request);
       const body = createGroupMessageSchema.parse(request.body);
+
+      if (checkTextContent(body.content)) {
+        return reply.status(400).send({ error: 'Ce message contient du contenu interdit.', flagged: true });
+      }
 
       // Verify membership
       const memberCheck = await query(

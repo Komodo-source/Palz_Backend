@@ -5,6 +5,26 @@ const BAN_WORD_LIST = [
   'bitcoin', 'argent facile', 'cliquez ici pour gagner',
 ];
 
+/** Lowercase + strip diacritics so "crève" and "creve" match the same entry. */
+function normalizeForModeration(text) {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    // strip combining diacritical marks (U+0300–U+036F)
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+// Precompile one regex per entry with word boundaries. Substring matching
+// (`includes`) caused false positives — e.g. the entry 'of' flagged any text
+// containing "coffee" or "profil". Word entries match whole words only;
+// multi-word phrases match as normalized phrases.
+const BAN_PATTERNS = BAN_WORD_LIST.map((entry) => {
+  const normalized = normalizeForModeration(entry);
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return { entry, regex: new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`, 'i') };
+});
+
 const MAGIC_BYTES = {
   'image/jpeg': Buffer.from([0xFF, 0xD8, 0xFF]),
   'image/png':  Buffer.from([0x89, 0x50, 0x4E, 0x47]),
@@ -60,8 +80,22 @@ async function checkImageNSFW(buffer) {
  */
 function checkTextContent(text) {
   if (!text || typeof text !== 'string') return null;
-  const lower = text.toLowerCase();
-  return BAN_WORD_LIST.find((word) => lower.includes(word)) || null;
+  const normalized = normalizeForModeration(text);
+  const hit = BAN_PATTERNS.find(({ regex }) => regex.test(normalized));
+  return hit ? hit.entry : null;
+}
+
+/**
+ * Moderate a set of user-supplied text fields in one call.
+ * `fields` is an object of { fieldName: value } — non-string/empty values are skipped.
+ * Returns null when everything is clean, or { field, match } for the first violation.
+ */
+function moderateTextFields(fields) {
+  for (const [field, value] of Object.entries(fields)) {
+    const match = checkTextContent(value);
+    if (match) return { field, match };
+  }
+  return null;
 }
 
 
@@ -73,4 +107,4 @@ async function checkImageSafety(buffer, mimeType) {
   return { safe: true };
 }
 
-module.exports = { checkImageSafety, checkTextContent, validateMagicBytes, BAN_WORD_LIST, checkImageNSFW };
+module.exports = { checkImageSafety, checkTextContent, moderateTextFields, validateMagicBytes, BAN_WORD_LIST, checkImageNSFW };

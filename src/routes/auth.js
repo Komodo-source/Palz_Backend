@@ -47,6 +47,26 @@ async function generateUserName(email) {
 const JWT_EXPIRY = '24h';
 const JWT_EXPIRY_SECONDS = 24 * 60 * 60;
 
+// ── Refresh tokens (S3) ─────────────────────────────────────────────────────
+// Rotating opaque tokens. Only the SHA-256 hash is stored server-side; the raw
+// value lives in the client's secure storage. Replaces the old "remember me"
+// flow that persisted the raw password on-device.
+const REFRESH_TOKEN_TTL_DAYS = 30;
+
+function hashRefreshToken(raw) {
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+async function issueRefreshToken(userId) {
+  const raw = crypto.randomBytes(48).toString('hex');
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await query(
+    `INSERT INTO refresh_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
+    [hashRefreshToken(raw), userId, expiresAt]
+  );
+  return raw;
+}
+
 function signToken(app, userId, email) {
   const jti = crypto.randomUUID();
   const token = app.jwt.sign(
@@ -124,10 +144,11 @@ async function authRoutes(app) {
         user = insertResult.rows[0];
       }
 
-      const { token, jti } = signToken(app, user.id, user.email);
+      const { token } = signToken(app, user.id, user.email);
+      const refreshToken = await issueRefreshToken(user.id);
       query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch((err) => console.error('[auth] login_events insert error:', err.message));
 
-      return reply.send({ user, token, isNewUser });
+      return reply.send({ user, token, refresh_token: refreshToken, isNewUser });
     } catch (err) {
       console.error('Google auth error:', err);
       return reply.status(401).send({ error: 'Google authentication failed' });
@@ -159,8 +180,9 @@ async function authRoutes(app) {
 
       const user = result.rows[0];
       const { token } = signToken(app, user.id, user.email);
+      const refreshToken = await issueRefreshToken(user.id);
 
-      return reply.status(201).send({ user, token });
+      return reply.status(201).send({ user, token, refresh_token: refreshToken });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
@@ -206,10 +228,11 @@ async function authRoutes(app) {
 
       delete user.password;
       const { token } = signToken(app, user.id, user.email);
+      const refreshToken = await issueRefreshToken(user.id);
 
       query('INSERT INTO login_events (user_id) VALUES ($1)', [user.id]).catch((err) => console.error('[auth] login_events insert error:', err.message));
 
-      return reply.send({ user, token });
+      return reply.send({ user, token, refresh_token: refreshToken });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Validation failed', details: err.errors });
@@ -219,7 +242,45 @@ async function authRoutes(app) {
     }
   });
 
-  // ── Logout — révocation serveur du token ──
+  // ── Refresh — échange un refresh token (rotation) contre un nouveau JWT ──
+  app.post('/refresh', authRateLimit, async (request, reply) => {
+    try {
+      const { refresh_token: rawToken } = request.body || {};
+      if (!rawToken || typeof rawToken !== 'string') {
+        return reply.status(400).send({ error: 'refresh_token is required' });
+      }
+
+      const tokenHash = hashRefreshToken(rawToken);
+      const result = await query(
+        `SELECT rt.user_id, u.email
+         FROM refresh_tokens rt
+         JOIN users u ON u.id = rt.user_id
+         WHERE rt.token_hash = $1
+           AND rt.revoked_at IS NULL
+           AND rt.expires_at > NOW()`,
+        [tokenHash]
+      );
+
+      if (result.rows.length === 0) {
+        return reply.status(401).send({ error: 'Invalid or expired refresh token — reconnecte-toi' });
+      }
+
+      const { user_id: userId, email } = result.rows[0];
+
+      // Rotation: the used token is revoked and a fresh one is issued.
+      // A stolen-then-replayed token therefore fails on second use.
+      await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1`, [tokenHash]);
+      const newRefreshToken = await issueRefreshToken(userId);
+      const { token } = signToken(app, userId, email);
+
+      return reply.send({ token, refresh_token: newRefreshToken });
+    } catch (err) {
+      console.error('/auth/refresh error:', err);
+      return reply.status(500).send({ error: 'Internal server error' });
+    }
+  });
+
+  // ── Logout — révocation serveur du token (+ refresh token si fourni) ──
   app.post('/logout', { preHandler: [app.authenticate] }, async (request, reply) => {
     try {
       const jti = request.user?.jti;
@@ -231,6 +292,16 @@ async function authRoutes(app) {
           `INSERT INTO revoked_tokens (jti, user_id, expires_at)
            VALUES ($1, $2, $3) ON CONFLICT (jti) DO NOTHING`,
           [jti, request.user.id, expiresAt]
+        );
+      }
+
+      // Revoke the device's refresh token so the session can't be silently resumed
+      const { refresh_token: rawToken } = request.body || {};
+      if (rawToken && typeof rawToken === 'string') {
+        await query(
+          `UPDATE refresh_tokens SET revoked_at = NOW()
+           WHERE token_hash = $1 AND user_id = $2`,
+          [hashRefreshToken(rawToken), request.user.id]
         );
       }
 
