@@ -10,14 +10,9 @@ const RC_DEACTIVATE = new Set(['EXPIRATION', 'BILLING_ISSUE_DETECTED_WITHOUT_GRA
 
 const uuidSchema = z.string().uuid();
 
-// ── Webhook secret is MANDATORY in production ──
-// Without it, anyone reaching the endpoint could grant themselves premium by
-// posting a forged event with their own app_user_id.
+// Without the secret the webhook route below refuses all requests (503),
+// so premium can never be granted via a forged event — the server can still boot.
 const WEBHOOK_SECRET = process.env.REVENUECAT_WEBHOOK_SECRET || null;
-if (!WEBHOOK_SECRET && process.env.NODE_ENV === 'production') {
-  console.error('[FATAL] REVENUECAT_WEBHOOK_SECRET manquant — le webhook paiements serait forgeable.');
-  process.exit(1);
-}
 if (!WEBHOOK_SECRET) {
   console.warn('[WARN] REVENUECAT_WEBHOOK_SECRET manquant — webhook paiements désactivé (503).');
 }
